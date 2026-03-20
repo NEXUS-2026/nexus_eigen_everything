@@ -1,4 +1,7 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
 opencv-python-headless>=4.9.0
-onnxruntime>=1.18.0 # CPU build, no GPU dep
+onnxruntime>=1.18.0
 numpy>=1.26.0
-lapx>=0.5.5 # ByteTrack dependency, includes lap
+supervision>=0.21.0
+lapx>=0.5.5
