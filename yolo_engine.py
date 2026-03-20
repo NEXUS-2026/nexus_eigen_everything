@@ -126,7 +126,7 @@ class ONNXDetector:
         model_outputs = self._session.get_outputs()
 
         self._input_name = model_inputs[0].name
-        self_output_name = model_outputs[0].name
+        self._output_name = model_outputs[0].name
 
         declared = model_inputs[0].shape
         if len(declared) == 4:
