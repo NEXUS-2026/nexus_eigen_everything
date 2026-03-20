@@ -1,0 +1,60 @@
+"""
+Single source of truth for every tunable constant in the pipeline.
+Change values here, never hardcode them in main.py or tracker_state.py.
+"""
+
+from __future__ import annotations
+import numpy as np
+from pathlib import Path
+
+# Paths
+
+BASE_DIR   = Path(__file__).parent
+MODEL_PATH = BASE_DIR / "models" / "yolov8n.onnx"
+DB_PATH    = BASE_DIR / "logs"   / "counts.db"
+LOG_DIR    = BASE_DIR / "logs"
+
+# Video source
+# Set to an integer (e.g. 0) for a webcam, or a file path string for a video.
+
+VIDEO_SOURCE: str | int = 0
+
+# Inference engine
+
+ONNX_INPUT_SIZE        = (640, 640)   # (W, H) must match your export
+CONFIDENCE_THRESHOLD   = 0.35
+NMS_IOU_THRESHOLD      = 0.45
+# COCO class 0 = person. Replace with your fine tuned box class ID.
+TARGET_CLASSES         = {0}
+# ORT intra op threads. 3 leaves 1 core free for the video thread on a Pi 4.
+ORT_INTRA_THREADS      = 3
+
+# Tracker & state machine
+
+TARGET_FPS       = 40
+DEBOUNCE_FRAMES  = 5    # frames inside ROI before +1 is confirmed (~125 ms)
+GHOST_FRAMES     = 90   # frames before a HIDDEN_INSIDE track is purged (~2.25 s)
+TRACK_BUFFER     = 120  # ByteTrack Kalman buffer keep >= GHOST_FRAMES
+
+
+# ROI polygon vertices in [x, y] order, pixel coordinates.
+# Default: centre 60 % of a 640x480 frame.
+# Measure your actual carton position and replace these values.
+
+_W, _H = 640, 480
+ROI_POLYGON = np.array([
+    [int(_W * 0.20), int(_H * 0.20)],   # top_left
+    [int(_W * 0.80), int(_H * 0.20)],   # top_right
+    [int(_W * 0.80), int(_H * 0.80)],   # bottom_right
+    [int(_W * 0.20), int(_H * 0.80)],   # bottom_left
+], dtype=np.int32)
+
+# WebSocket streaming
+
+JPEG_QUALITY    = 70    # 0-100. Lower = smaller payload = lower latency on LAN.
+STREAM_MAX_FPS  = 40    # Cap the WebSocket push rate independently of capture FPS.
+
+# FastAPI server
+
+HOST = "0.0.0.0"
+PORT = 8000
