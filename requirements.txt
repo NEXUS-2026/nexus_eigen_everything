@@ -1,0 +1,4 @@
+opencv-python-headless>=4.9.0
+onnxruntime>=1.18.0 # CPU build, no GPU dep
+numpy>=1.26.0
+lapx>=0.5.5 # ByteTrack dependency, includes lap
