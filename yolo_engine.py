@@ -63,28 +63,28 @@ class DetectionResult:
     
     # letterbox helper : preserves aspect ratio, pads to square
 
-    def _letterbox(
-        frame: np.ndarray,
-        target_wh: tuple[int, int],
-        pad_value: int = 114,
-    ) -> tuple[np.ndarray, float, tuple[int, int]]:
-        
-        target_w, target_h = target_wh
-        src_h, src_w = frame.shape[:2]
+def _letterbox(
+    frame: np.ndarray,
+    target_wh: tuple[int, int],
+    pad_value: int = 114,
+) -> tuple[np.ndarray, float, tuple[int, int]]:
+    
+    target_w, target_h = target_wh
+    src_h, src_w = frame.shape[:2]
 
-        # Uniform scale fit both dimensions without exceeding the target
-        scale = min(target_w / src_w, target_h / src_h)
-        new_w = int(round(src_w * scale))
-        new_h = int(round(src_h * scale))
+    # Uniform scale fit both dimensions without exceeding the target
+    scale = min(target_w / src_w, target_h / src_h)
+    new_w = int(round(src_w * scale))
+    new_h = int(round(src_h * scale))
 
-        resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
-        canvas = np.full((target_h, target_w, 3), pad_value, dtype=np.uint8)
-        pad_top = (target_h - new_h) // 2
-        pad_left = (target_w - new_w) // 2
-        canvas[pad_top:pad_top + new_h, pad_left:pad_left + new_w] = resized
+    canvas = np.full((target_h, target_w, 3), pad_value, dtype=np.uint8)
+    pad_top = (target_h - new_h) // 2
+    pad_left = (target_w - new_w) // 2
+    canvas[pad_top:pad_top + new_h, pad_left:pad_left + new_w] = resized
 
-        return canvas, scale, (pad_left, pad_top)
+    return canvas, scale, (pad_left, pad_top)
     
 # Main engine class
 
