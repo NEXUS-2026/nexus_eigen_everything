@@ -208,6 +208,14 @@ def video_worker() -> None:
     if not cap.isOpened():
         logger.error("Cannot open video source: %s", config.VIDEO_SOURCE)
         return
+    
+    # Kill the buffer so we only ever get the absolute newest frame (Zero Lag)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    
+    # Force the webcam hardware to output a smaller resolution (Saves USB bandwidth & CPU)
+    # 640x480 is standard VGA and plenty of pixels for YOLO to detect boxes
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
     # Read actual frame dimensions from the capture device
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
