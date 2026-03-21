@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Mac OS 
+.DS_Store
+
+# Virtual env
+venv/
+env/
+.env
+
+# Database and Logs 
+Logs/
+*.db
+*.sqlite3
+
+# AI models 
+models/
+*.pt
+*.onnx
+
