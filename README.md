@@ -1,3 +1,9 @@
+# Detection and Counting Logic Output of the Model
+[text](https://drive.google.com/file/d/1R55ghBvRfjgnqcuUo0sVhw8V5iHL8THL/view?usp=drive_link)
+[text](https://drive.google.com/file/d/1IydMMlZjxkDMiN49cOsS5jv092XO_BXO/view?usp=drive_link)
+[text](https://drive.google.com/file/d/1fudz1IoYSbbDpNLt3z1VMi8hvRnzrpPY/view?usp=drive_link)
+[text](https://drive.google.com/file/d/1NUu4rssJTmKpRW0WMG305A4ypbhJnNRr/view?usp=sharing)
+
 # Logistics Vision System: Real Time Box Counter
 
 A high performance, edge optimised computer vision pipeline for real time tracking and counting of warehouse packages. Built to run efficiently on CPU constrained devices (like Raspberry Pi) while streaming 40 FPS video to a modern web dashboard.
@@ -32,8 +38,7 @@ Counting boxes manually on a packing line is error prone and slow. This system a
 The system is designed specifically for edge hardware limits:
 1. **Thread 1 (Main):** Async FastAPI server handling WebSocket broadcasts and REST endpoints.
 2. **Thread 2 (Inference Daemon):** Runs the YOLO ONNX model on the latest available frame, dropping stale frames to prevent queue buildup.
-3. **Thread 3 (Video/Tracker Daemon):** Reads the camera at a strict 40 FPS, merges YOLO detections with the ByteTrack Kalman filter, manages the Spatial State Machine, logs to SQLite, and pushes annotated frames to the WebSocket.
-
+3. **Thread 3 (Video/Tracker Daemon):** Reads the camera at a strict 40 FPS(FPS may vary, but targeted FPS are 40), merges YOLO detections with the ByteTrack Kalman filter, manages the Spatial State Machine, logs to SQLite, and pushes annotated frames to the WebSocket.
 ---
 
 ## Installation & Setup
@@ -84,3 +89,29 @@ All core parameters can be tuned in **config.py** without digging into the logic
 * **TARGET_CLASSES:** Filter exactly which YOLO classes to track.
 * **ROI_POLYGON:** Adjust the coordinates of the target carton zone.
 * **EDGE_MARGIN_PIXELS:** Tune the occlusion threshold.
+
+## Running the Model using Run Counter
+
+### 1. Find the video file path 
+If you are not using the webcam feed. Try to store the video files in the assests folder in the root directory. 
+
+### 2. Run the run_counter.py 
+```bash
+# If using Webcam feed
+python run_counter.py --model models/best.onnx --source 0
+```
+
+```bash
+# Basic run on a video file
+python run_counter.py --source "video_path"
+```
+
+```bash
+# Run with specific model
+python run_counter.py --model models/best.onnx --source "video_path"
+```
+
+```bash
+# Save annotated output video
+python run_counter.py --model models/best.onnx --source "video_path" --save
+```
