@@ -33,8 +33,8 @@ ORT_INTRA_THREADS      = 3
 
 TARGET_FPS       = 40
 DEBOUNCE_FRAMES  = 5    # frames inside ROI before +1 is confirmed (~125 ms)
-GHOST_FRAMES     = 200   # Increase to 200 frames (5 full seconds of memory if the camera is blocked). If the worker takes longer than 5 seconds, increase this to 400 (10 seconds)
-TRACK_BUFFER     = 240  # The ByteTrack Kalman buffer MUST be larger than the GHOST_FRAMES. This ensures the tracker algorithm doesn't forget the boxes before your state machine does.
+GHOST_FRAMES     = 30   # Increase to 200 frames (5 full seconds of memory if the camera is blocked). If the worker takes longer than 5 seconds, increase this to 400 (10 seconds)
+TRACK_BUFFER     = 30  # The ByteTrack Kalman buffer MUST be larger than the GHOST_FRAMES. This ensures the tracker algorithm doesn't forget the boxes before your state machine does.
 
 
 # ROI polygon vertices in [x, y] order, pixel coordinates.

@@ -469,8 +469,7 @@ def video_worker() -> None:
                 
                 frame_h, frame_w = frame.shape[:2]
                 state_machine._zone = sv.PolygonZone(
-                    polygon=dynamic_polygon,
-                    frame_resolution_wh=(frame_w, frame_h)
+                    polygon=dynamic_polygon
                 )
                 config.ROI_POLYGON = dynamic_polygon
                 print(f"CARTON LOCKED! Auto ROI moved to: {int(cx1)}, {int(cy1)}")

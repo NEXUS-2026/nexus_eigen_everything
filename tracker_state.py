@@ -113,7 +113,7 @@ class BoxTrackerStateMachine:
         self._tracker = sv.ByteTrack(
             track_activation_threshold=0.25,  # min score to start a new track
             lost_track_buffer=track_buffer,   # frames before ByteTrack kills a track
-            minimum_matching_threshold=0.80,  # IOU threshold for track association
+            minimum_matching_threshold=0.40,  # IOU threshold for track association
             frame_rate=fps,
         )
         self._zone = sv.PolygonZone(
@@ -151,6 +151,7 @@ class BoxTrackerStateMachine:
             inside_mask: np.ndarray = self._zone.trigger(tracked)
         else:
             inside_mask = np.array([], dtype=bool)
+            
         # We iterate this below to drive state transitions.
         active_ids: set[int] = set()
 
@@ -163,6 +164,7 @@ class BoxTrackerStateMachine:
             cy      = float((box[1] + box[3]) / 2)
             active_ids.add(tid)
             id_to_info[tid] = (box, inside, (cx, cy))
+            
         for tid, (box, inside, center) in id_to_info.items():
             rec = self._records.get(tid)
 
@@ -173,89 +175,73 @@ class BoxTrackerStateMachine:
                     debounce_frames=1 if inside else 0,
                     last_center=center,
                 )
-                # Note: REMOVED here is a slight misnomer for a brand new track
-                # that appears outside the ROI. We use REMOVED as the "not inside,
-                # not pending" catch all to keep the state space small.
                 self._records[tid] = rec
 
             # Update last known center every frame the track is visible
             rec.last_center  = center
             rec.ghost_frames = 0   # reset ghost timer, track is alive
 
-            # Transition table 
+            # --- Transition table for VISIBLE tracks ---
 
             if rec.state == TrackState.PENDING_ENTER:
                 if inside:
                     rec.debounce_frames += 1
                     if rec.debounce_frames >= self.debounce_frames:
-                        # Debounce satisfied to confirm the addition
+                        # Debounce satisfied: ADD TO COUNT
                         rec.state        = TrackState.CONFIRMED_INSIDE
                         rec.confirmed_at = time.time()
                         self._count     += 1
                         events.append(("ADDED", tid))
                         logger.debug("Track %d CONFIRMED_INSIDE (count=%d)", tid, self._count)
                 else:
-                    # Left before debounce completed reset
+                    # Left before debounce completed: reset
                     rec.state           = TrackState.REMOVED
                     rec.debounce_frames = 0
 
             elif rec.state == TrackState.CONFIRMED_INSIDE:
                 if not inside:
-                    # Moved out of ROI decrement count
+                    # Physically moved out of ROI: DECREMENT COUNT
                     rec.state    = TrackState.REMOVED
                     self._count  = max(0, self._count - 1)
                     events.append(("REMOVED", tid))
                     logger.debug("Track %d REMOVED (count=%d)", tid, self._count)
-                # If still inside: nothing to do stay CONFIRMED_INSIDE
 
             elif rec.state == TrackState.HIDDEN_INSIDE:
-                # Track reappeared decide where it is now
                 rec.ghost_frames = 0
                 if inside:
-                    # Reappeared inside relink silently, count already held
+                    # Reappeared inside: Silently relink (Count already holds this +1)
                     rec.state = TrackState.CONFIRMED_INSIDE
-                    logger.debug("Track %d relinked as CONFIRMED_INSIDE", tid)
                 else:
-                    # Reappeared outside it has genuinely left
+                    # Reappeared outside: It was taken out. DECREMENT COUNT
                     rec.state   = TrackState.REMOVED
                     self._count = max(0, self._count - 1)
                     events.append(("REMOVED", tid))
-                    logger.debug(
-                        "Track %d reappeared OUTSIDE after HIDDEN — REMOVED (count=%d)",
-                        tid, self._count,
-                    )
+                    logger.debug("Track %d reappeared OUTSIDE after HIDDEN — REMOVED (count=%d)", tid, self._count)
 
             elif rec.state == TrackState.REMOVED:
                 if inside:
-                    # A previously removed track reentered the ROI
                     rec.state           = TrackState.PENDING_ENTER
                     rec.debounce_frames = 1
 
+        # --- Transition table for DISAPPEARED tracks ---
         for tid, rec in list(self._records.items()):
             if tid in active_ids:
                 continue  # already handled above
 
             if rec.state == TrackState.CONFIRMED_INSIDE:
-                # Just disappeared while confirmed inside to enter occlusion guard
+                # Just disappeared while inside: enter occlusion guard
                 rec.state       = TrackState.HIDDEN_INSIDE
                 rec.ghost_frames = 1
                 events.append(("HIDDEN", tid))
-                logger.debug(
-                    "Track %d disappeared inside ROI → HIDDEN_INSIDE at center=%s",
-                    tid, rec.last_center,
-                )
 
             elif rec.state == TrackState.HIDDEN_INSIDE:
                 rec.ghost_frames += 1
                 if rec.ghost_frames > self.ghost_frames:
-                    # Occlusion guard expired  box truly gone
-                    self._count = max(0, self._count - 1)
-                    events.append(("REMOVED", tid))
+                    # 🚨 EVENT-DRIVEN ACCUMULATOR FIX 🚨
+                    # The ghost timer expired, meaning the box is permanently buried/stacked.
+                    # We DELETE the tracking record to save memory, but we DO NOT subtract from the count!
                     del self._records[tid]
-                    logger.debug(
-                        "Track %d ghost timer expired → purged (count=%d)",
-                        tid, self._count,
-                    )
+                    logger.debug("Track %d permanently stacked/occluded. Purging memory, keeping count at %d", tid, self._count)
 
             elif rec.state in (TrackState.PENDING_ENTER, TrackState.REMOVED):
                 # Never contributed to the count, safe to purge immediately
@@ -266,10 +252,8 @@ class BoxTrackerStateMachine:
         }
 
         return FrameResult(
-            tracked_boxes=tracked.xyxy if len(tracked) > 0
-                          else np.empty((0, 4), dtype=np.float32),
-            track_ids=tracked.tracker_id if len(tracked) > 0
-                      else np.empty((0,), dtype=int),
+            tracked_boxes=tracked.xyxy if len(tracked) > 0 else np.empty((0, 4), dtype=np.float32),
+            track_ids=tracked.tracker_id if len(tracked) > 0 else np.empty((0,), dtype=int),
             box_count=self._count,
             track_states=track_states,
             events=events,
