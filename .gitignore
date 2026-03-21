@@ -1,26 +1,28 @@
-# Python cache
+# OS Generated Files (Mac)
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python / Backend
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Mac OS 
-.DS_Store
-
-# Virtual env
-venv/
-env/
+backend_mac_os_env/
 .env
 
-# Database and Logs 
-Logs/
-logs/
-*.db
+# Databases
+# Ignore the live database so you don't push thousands of test logs
+counts.db
+*.sqlite
 *.sqlite3
 
-# Frontend/build artifacts
-node_modules/
-Frontend/node_modules/
-dist/
+# Media & Uploads
+# Ignore local test videos in the root folder
+*.mp4
+*.mov
+*.avi
+*.mkv
 
-# Runtime artifacts
-uploads/
+# Ignore uploaded files, but keep the empty uploads folder
+uploads/*
+!uploads/.gitkeep
