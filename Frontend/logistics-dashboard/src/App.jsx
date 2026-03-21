@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 
 // Constants
 
-const WS_URL           = "ws://localhost:8000/ws";
+const WS_URL           = `ws://${window.location.host}/ws`;
 const RECONNECT_DELAY  = 3000;   // ms before attempting a reconnect
 const METRIC_THROTTLE  = 6;      // update metric useState every N frames (keeps React re-renders at 6~7/sec)
 
