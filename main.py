@@ -48,6 +48,8 @@ import config
 from database import CountDatabase
 from tracker_state import BoxTrackerStateMachine, FrameResult, TrackState
 from yolo_engine import DetectionResult, ONNXDetector
+from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
 
 
 # Logging
@@ -477,8 +479,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Serve index.html + style.css from /static
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 # WebSocket endpoint
