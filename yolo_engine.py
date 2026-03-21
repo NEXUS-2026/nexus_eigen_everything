@@ -192,74 +192,98 @@ class ONNXDetector:
             pad_top: int,
     ) -> DetectionResult:
         orig_h, orig_w = orig_shape
-        pred = raw.T
+        
+        # Dyanmic shape detection
+        if raw.shape[-1] == 6:
+            # It's YOLOv10 or NMS-embedded (shape: N, 6)
+            # Format: [x1, y1, x2, y2, score, class]
+            x1 = raw[:, 0]
+            y1 = raw[:, 1]
+            x2 = raw[:, 2]
+            y2 = raw[:, 3]
+            scores_all = raw[:, 4]
+            class_ids_all = raw[:, 5].astype(np.int32)
+            is_xywh = False # Already xyxy format
 
-        boxes_raw = pred[:, :4]
-        class_scores = pred[:, 4:]
+        else: 
+            # It's standard YOLOv8 (Shape: 84, 8400)
+            pred = raw.T
+            boxes_raw = pred[:, :4]
+            class_scores = pred[:, 4:]
 
-        # Best class and its score for each anchor
-        class_ids_all = np.argmax(class_scores, axis=1).astype(np.int32)
-        scores_all = class_scores[np.arange(len(pred)), class_ids_all].astype(np.float32)
+            class_ids_all = np.argmax(class_scores, axis=1).astype(np.int32)
+            scores_all = class_scores[np.arange(len(pred)), class_ids_all].astype(np.float32)
 
-        # confidence threshold mask
+            # Convert xywh to xyxy
+            cx, cy, bw, bh = boxes_raw[:,0], boxes_raw[:,1], boxes_raw[:,2], boxes_raw[:,3]
+            x1 = cx - bw / 2
+            y1 = cy - bh / 2
+            x2 = cy + bw / 2
+            y2 = cy + bh / 2
+            is_xywh = True
+        
+        # Apply Threshold
         mask = scores_all >= self.conf_thresh
         if not mask.any():
             return DetectionResult.empty()
-
-        boxes_f = boxes_raw[mask]
+        
+        x1_f, y1_f, x2_f, y2_f = x1[mask], y1[mask], x2[mask], y2[mask]
         scores_f = scores_all[mask]
         class_f = class_ids_all[mask]
 
-        # Optional, discard classes we dont care about
+        # Filter by target class (from config.py)
         if self.target_cls is not None:
             cls_mask = np.isin(class_f, list(self.target_cls))
             if not cls_mask.any():
                 return DetectionResult.empty()
-            boxes_f = boxes_f[cls_mask]
-            scores_f = class_f[cls_mask]
+            x1_f, y1_f, x2_f, y2_f = x1_f[cls_mask], y1_f[cls_mask], x2_f[cls_mask], y2_f[cls_mask]
+            scores_f = scores_f[cls_mask]
+            class_f = class_f[mask]
 
-        cx, cy, bw, bh = boxes_f[:, 0], boxes_f[:, 1], boxes_f[:, 2], boxes_f[:, 3]
-        x1 = cx - bw / 2
-        y1 = cy - bh / 2
-        x2 = cx + bw / 2
-        y2 = cy + bh / 2
+        # Invert Letterbox to original pixels
+        x1_f = (x1_f - pad_left) / scale
+        y1_f = (y1_f - pad_top) / scale
+        x2_f = (x2_f - pad_left) / scale
+        y2_f = (x2_f - pad_top) / scale
 
-        # Invert the letterbox transform to original pixel coordinates
-        x1 = (x1 - pad_left) / scale
-        y1 = (y1 - pad_top) / scale
-        x2 = (x2 - pad_left) / scale
-        y2 = (y2 - pad_top) / scale
+        # Clip to frame bounds 
+        x1_f = np.clip(x1_f, 0, orig_w).astype(np.float32)
+        y1_f = np.clip(y1_f, 0, orig_h).astype(np.float32)
+        x2_f = np.clip(x2_f, 0, orig_w).astype(np.float32)
+        y2_f = np.clip(y2_f, 0, orig_h).astype(np.float32)
 
-        # Clip to frame bounds
-        x1 = np.clip(x1, 0, orig_w).astype(np.float32)
-        y1 = np.clip(y1, 0, orig_h).astype(np.float32)
-        x2 = np.clip(x2, 0, orig_w).astype(np.float32)
-        y2 = np.clip(y2, 0, orig_h).astype(np.float32)
+        # Final NMS / output
+        if not is_xywh:
+            # YOLOv10 already applied NMS natively, just return the boxes
+            final_boxes = np.stack([x1_f, y1_f, x2_f, y2_f], axis=1)
+            return DetectionResult(
+                boxes=final_boxes,
+                scores=scores_f,
+                class_ids=class_f
+            )
+        else: 
+            # Standard YOLOv8 requires OpenCV NMS
+            boxes_xywh = np.stack([x1_f, y1_f, x2_f - x1_f, y2_f - y1_f], axis=1)
+            keep_idx = cv2.dnn.NMSBoxes(
+                boxes_xywh.tolist(),
+                scores_f.tolist(),
+                self.conf_thresh,
+                self.nms_thresh,
+            )
+            if len (keep_idx) == 0: 
+                return DetectionResult.empty()
+            
+            keep_idx = np.array(keep_idx).flatten()
+            final_boxes = np.stack(
+                [x1_f[keep_idx], y1_f[keep_idx], x2_f[keep_idx], y2_f[keep_idx]], axis=1
+            ).astype(np.float32)
 
-        # OpenCV NMS expects [x, y, w, h] format + python lists
-        boxes_xywh = np.stack([x1, y1, x2 - x1, y2 - y1], axis=1)
-        keep_idx = cv2.dnn.NMSBoxes(
-            boxes_xywh.tolist(),
-            scores_f.tolist(),
-            self.conf_thresh,
-            self.nms_thresh,
-        )
+            return DetectionResult(
+                boxes=final_boxes,
+                scores=scores_f[keep_idx],
+                class_ids=class_f[keep_idx],
+            )
 
-        if len(keep_idx) == 0:
-            return DetectionResult.empty()
-        
-        # Older OpenCV returns (N, 1); newer returns (N,) — flatten defensively
-        keep_idx = np.array(keep_idx).flatten()
-
-        final_boxes = np.stack(
-            [x1[keep_idx], y1[keep_idx], x2[keep_idx], y2[keep_idx]], axis=1
-        ).astype(np.float32)
-
-        return DetectionResult(
-            boxes=final_boxes,
-            scores=scores_f[keep_idx],
-            class_ids=class_f[keep_idx],
-        )
 
 # Smoke test python yolo_engine.py 
 

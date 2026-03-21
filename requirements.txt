@@ -5,3 +5,6 @@ onnxruntime>=1.18.0
 numpy>=1.26.0
 supervision>=0.21.0
 lapx>=0.5.5
+ultralytics>=8.3.0
+opencv-python>=4.9.0
+onnx>=1.16.0

@@ -10,7 +10,7 @@ from pathlib import Path
 # Paths
 
 BASE_DIR   = Path(__file__).parent
-MODEL_PATH = BASE_DIR / "models" / "yolov8n.onnx"
+MODEL_PATH = BASE_DIR / "models" / "yolo26n.onnx"
 DB_PATH    = BASE_DIR / "logs"   / "counts.db"
 LOG_DIR    = BASE_DIR / "logs"
 
@@ -25,7 +25,7 @@ ONNX_INPUT_SIZE        = (640, 640)   # (W, H) must match your export
 CONFIDENCE_THRESHOLD   = 0.35
 NMS_IOU_THRESHOLD      = 0.45
 # COCO class 0 = person. Replace with your fine tuned box class ID.
-TARGET_CLASSES         = {0}
+TARGET_CLASSES         = {2}
 # ORT intra op threads. 3 leaves 1 core free for the video thread on a Pi 4.
 ORT_INTRA_THREADS      = 3
 
