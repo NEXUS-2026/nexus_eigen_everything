@@ -43,6 +43,7 @@ from typing import Optional
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
+import shutil
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -426,22 +427,35 @@ def video_worker() -> None:
         # Annotate frame
         annotated = _annotate_frame(frame, result, fps_actual)
 
-        # JPEG-encode and push to output queue
+        # Format events for frontend
+        current_time = time.strftime("%H:%M:%S")
+        formatted_events = [
+            {
+                "type": str(event_type),
+                "track_id": int(track_id),
+                "at": current_time
+            }
+            for event_type, track_id in result.events
+        ]
+
+        # JPEG encode and push to output queue
         ok, buf = cv2.imencode(
             ".jpg", annotated,
             [cv2.IMWRITE_JPEG_QUALITY, config.JPEG_QUALITY],
         )
-        if ok:
+        if ok: 
             payload = json.dumps({
-                "frame":  base64.b64encode(buf.tobytes()).decode("ascii"),
-                "count":  result.box_count,
-                "fps":    round(fps_actual, 1),
+                "frame": base64.b64decode(buf.tobytes()).decode("ascii"),
+                "count": result.box_count,
+                "fps": round(fps_actual, 1),
                 "inf_ms": round(result.inference_ms, 1),
+                "model_ready": True, # Tells V2 to exit "Preview Mode"
+                "events": formatted_events # Populates the event timeline
             })
             try:
                 output_queue.put_nowait(payload)
             except queue.Full:
-                pass  # WebSocket client is slow drop this frame, not a problem
+                pass # Websocket client is slow drop this frame, not a problem 
 
         # Measure actual FPS every 60 frames
         fps_frames += 1
