@@ -13,8 +13,17 @@ env/
 
 # Database and Logs 
 Logs/
+logs/
 *.db
 *.sqlite3
+
+# Frontend/build artifacts
+node_modules/
+Frontend/node_modules/
+dist/
+
+# Runtime artifacts
+uploads/
 
 # AI models 
 models/

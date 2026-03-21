@@ -32,15 +32,17 @@ import base64
 import json
 import logging
 import queue
+import shutil
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Optional
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -130,6 +132,35 @@ inference_queue: queue.Queue[Optional[np.ndarray]] = queue.Queue(maxsize=1)
 # maxsize=2 prevents memory build-up if the WebSocket client is slow.
 output_queue: queue.Queue[Optional[FrameResult]] = queue.Queue(maxsize=2)
 
+
+@dataclass
+class VideoSourceState:
+    """
+    Controls dynamic source switching from API requests to the video thread.
+    """
+    lock: threading.Lock = threading.Lock()  # type: ignore[assignment]
+    requested_source: Optional[str] = None
+    active_source: Optional[str] = None
+    paused: bool = False
+    seek_to_sec: Optional[float] = None
+    duration_sec: float = 0.0
+    position_sec: float = 0.0
+    is_file_source: bool = False
+    clear_requested: bool = False
+
+
+video_source_state = VideoSourceState()
+UPLOAD_DIR = Path(__file__).parent / "uploads"
+VIDEO_FILE_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+
+
+def _is_file_source(source: str | int) -> bool:
+    """Heuristic for whether the active source is a local video file."""
+    if isinstance(source, int):
+        return False
+    suffix = Path(str(source)).suffix.lower()
+    return suffix in VIDEO_FILE_SUFFIXES
+
 # Populated during lifespan startup
 db:            Optional[CountDatabase]          = None
 state_machine: Optional[BoxTrackerStateMachine] = None
@@ -206,33 +237,24 @@ def video_worker() -> None:
 
     logger.info("Video worker starting …")
 
-    cap = cv2.VideoCapture(config.VIDEO_SOURCE)
-    if not cap.isOpened():
-        logger.error("Cannot open video source: %s", config.VIDEO_SOURCE)
-        return
-    
-    # Kill the buffer so we only ever get the absolute newest frame (Zero Lag)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    
-    # Force the webcam hardware to output a smaller resolution (Saves USB bandwidth & CPU)
-    # 640x480 is standard VGA and plenty of pixels for YOLO to detect boxes
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    current_source: str | int = config.VIDEO_SOURCE
+    cap: Optional[cv2.VideoCapture] = None
 
-    # Read actual frame dimensions from the capture device
-    frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    logger.info("Capture opened: %dx%d", frame_w, frame_h)
-
-    # Initialise state machine with actual frame dimensions
-    state_machine = BoxTrackerStateMachine(
-        roi_polygon=config.ROI_POLYGON,
-        frame_wh=(frame_w, frame_h),
-        debounce_frames=config.DEBOUNCE_FRAMES,
-        ghost_frames=config.GHOST_FRAMES,
-        track_buffer=config.TRACK_BUFFER,
-        fps=config.TARGET_FPS,
-    )
+    first_try = cv2.VideoCapture(current_source)
+    if first_try.isOpened():
+        cap = first_try
+        with video_source_state.lock:
+            video_source_state.active_source = str(current_source)
+            video_source_state.is_file_source = _is_file_source(current_source)
+    else:
+        logger.warning(
+            "Initial video source unavailable: %s. Waiting for source switch/upload.",
+            current_source,
+        )
+        first_try.release()
+        with video_source_state.lock:
+            video_source_state.active_source = None
+            video_source_state.is_file_source = False
 
     # Open DB session
     db = CountDatabase(config.DB_PATH)
@@ -256,12 +278,118 @@ def video_worker() -> None:
         t_start = time.perf_counter()
         tick   += 1
 
+        # Apply API-requested source switch without restarting the server.
+        pending_source: Optional[str] = None
+        paused = False
+        seek_to_sec: Optional[float] = None
+        clear_requested = False
+        with video_source_state.lock:
+            if (
+                video_source_state.requested_source is not None
+                and video_source_state.requested_source != str(current_source)
+            ):
+                pending_source = video_source_state.requested_source
+                video_source_state.requested_source = None
+            paused = video_source_state.paused
+            seek_to_sec = video_source_state.seek_to_sec
+            video_source_state.seek_to_sec = None
+            clear_requested = video_source_state.clear_requested
+            video_source_state.clear_requested = False
+
+        if clear_requested:
+            if cap is not None:
+                cap.release()
+                cap = None
+            with video_source_state.lock:
+                video_source_state.active_source = None
+                video_source_state.is_file_source = False
+                video_source_state.paused = False
+                video_source_state.position_sec = 0.0
+                video_source_state.duration_sec = 0.0
+            time.sleep(0.05)
+            continue
+
+        if pending_source is not None:
+            candidate_source: str | int = pending_source
+            new_cap = cv2.VideoCapture(candidate_source)
+            if new_cap.isOpened():
+                if cap is not None:
+                    cap.release()
+                cap = new_cap
+                current_source = candidate_source
+
+                # Keep low-latency defaults after source switch.
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+                frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                logger.info("Switched video source to %s (%dx%d)", current_source, frame_w, frame_h)
+
+                # Reset state for a fresh run on the new video stream.
+                state_machine = BoxTrackerStateMachine(
+                    roi_polygon=config.ROI_POLYGON,
+                    frame_wh=(frame_w, frame_h),
+                    debounce_frames=config.DEBOUNCE_FRAMES,
+                    ghost_frames=config.GHOST_FRAMES,
+                    track_buffer=config.TRACK_BUFFER,
+                    fps=config.TARGET_FPS,
+                )
+                last_detection = DetectionResult.empty()
+
+                if db is not None:
+                    db.end_session(0)
+                    db.start_session()
+
+                with video_source_state.lock:
+                    video_source_state.active_source = str(current_source)
+                    video_source_state.is_file_source = _is_file_source(current_source)
+                    video_source_state.paused = False
+            else:
+                if pending_source is not None:
+                    logger.error("Failed to switch source. Cannot open: %s", pending_source)
+                new_cap.release()
+                if cap is None:
+                    time.sleep(0.05)
+                    continue
+
+        if cap is None or state_machine is None:
+            time.sleep(0.05)
+            continue
+
+        is_file_source = _is_file_source(current_source)
+
+        if seek_to_sec is not None and is_file_source:
+            cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, seek_to_sec) * 1000.0)
+
+        if paused and is_file_source:
+            pos_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            fps_cap = cap.get(cv2.CAP_PROP_FPS) or 0.0
+            duration_sec = (frame_count / fps_cap) if fps_cap > 0 else 0.0
+            with video_source_state.lock:
+                video_source_state.position_sec = max(0.0, pos_ms / 1000.0)
+                video_source_state.duration_sec = max(0.0, duration_sec)
+                video_source_state.is_file_source = True
+            time.sleep(frame_duration)
+            continue
+
         # Capture frame
         ret, frame = cap.read()
         if not ret:
             # End of file loop back to start for recorded video
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
+
+        pos_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        fps_cap = cap.get(cv2.CAP_PROP_FPS) or 0.0
+        duration_sec = (frame_count / fps_cap) if fps_cap > 0 else 0.0
+        with video_source_state.lock:
+            video_source_state.position_sec = max(0.0, pos_ms / 1000.0)
+            video_source_state.duration_sec = max(0.0, duration_sec)
+            video_source_state.is_file_source = is_file_source
 
         # Feed frame to Thread 2 (non-blocking)
         # put_nowait drops the frame if Thread 2 is still busy intentional.
@@ -331,9 +459,11 @@ def video_worker() -> None:
         while (time.perf_counter() - t_start) < frame_duration:
             pass                                    # busy wait the last 2 ms
 
-    cap.release()
-    db.end_session(state_machine.count)
-    logger.info("Video worker exiting. Final count: %d", state_machine.count)
+    if cap is not None:
+        cap.release()
+    final_count = state_machine.count if state_machine is not None else 0
+    db.end_session(final_count)
+    logger.info("Video worker exiting. Final count: %d", final_count)
 
 
 # Frame annotation helper (called by Thread 3)
@@ -485,6 +615,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -568,6 +699,127 @@ async def reset_session() -> JSONResponse:
         db.end_session(0)
         db.start_session()
     return JSONResponse({"status": "ok", "message": "Session reset."})
+
+
+@app.post("/video/upload")
+async def upload_video(file: UploadFile = File(...)) -> JSONResponse:
+    """
+    Upload a local video file from the browser and request runtime source switch.
+    """
+    if not file.filename:
+        return JSONResponse(
+            {"status": "error", "message": "No file selected."},
+            status_code=400,
+        )
+
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in VIDEO_FILE_SUFFIXES:
+        return JSONResponse(
+            {
+                "status": "error",
+                "message": "Unsupported file type. Use mp4/avi/mov/mkv/webm.",
+            },
+            status_code=400,
+        )
+
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    target_name = f"{int(time.time())}_{uuid.uuid4().hex[:8]}{suffix}"
+    target_path = UPLOAD_DIR / target_name
+
+    with target_path.open("wb") as out:
+        shutil.copyfileobj(file.file, out)
+    await file.close()
+
+    # Validate quickly before switching the live pipeline to this file.
+    probe = cv2.VideoCapture(str(target_path))
+    ok = probe.isOpened()
+    probe.release()
+    if not ok:
+        target_path.unlink(missing_ok=True)
+        return JSONResponse(
+            {"status": "error", "message": "Uploaded file is not a readable video."},
+            status_code=400,
+        )
+
+    with video_source_state.lock:
+        video_source_state.requested_source = str(target_path)
+        video_source_state.paused = False
+        video_source_state.seek_to_sec = None
+
+    logger.info("Upload accepted. Pending source switch to: %s", target_path)
+    return JSONResponse(
+        {
+            "status": "ok",
+            "message": "Video uploaded. Source switch queued.",
+            "filename": target_name,
+            "source": str(target_path),
+        }
+    )
+
+
+@app.get("/video/source")
+async def get_video_source() -> JSONResponse:
+    """Inspect currently active and pending video source values."""
+    with video_source_state.lock:
+        active = video_source_state.active_source
+        pending = video_source_state.requested_source
+        paused = video_source_state.paused
+        is_file_source = video_source_state.is_file_source
+    return JSONResponse({
+        "active_source": active,
+        "pending_source": pending,
+        "paused": paused,
+        "is_file_source": is_file_source,
+    })
+
+
+@app.post("/video/clear")
+async def clear_video_source() -> JSONResponse:
+    """Unload current source and clear playback state."""
+    with video_source_state.lock:
+        video_source_state.requested_source = None
+        video_source_state.clear_requested = True
+        video_source_state.paused = False
+        video_source_state.seek_to_sec = None
+    return JSONResponse({"status": "ok", "message": "Video source clear requested."})
+
+
+@app.post("/video/control")
+async def control_video(action: str, seconds: Optional[float] = None) -> JSONResponse:
+    """Playback controls for uploaded file sources: pause/resume/seek."""
+    action = action.lower().strip()
+    with video_source_state.lock:
+        if action == "pause":
+            video_source_state.paused = True
+        elif action == "resume":
+            video_source_state.paused = False
+        elif action == "seek_to":
+            if seconds is None:
+                return JSONResponse({"status": "error", "message": "seconds is required for seek_to."}, status_code=400)
+            video_source_state.seek_to_sec = max(0.0, float(seconds))
+        elif action == "seek_by":
+            if seconds is None:
+                return JSONResponse({"status": "error", "message": "seconds is required for seek_by."}, status_code=400)
+            base = video_source_state.position_sec
+            video_source_state.seek_to_sec = max(0.0, float(base + seconds))
+        else:
+            return JSONResponse({"status": "error", "message": "Unsupported action."}, status_code=400)
+
+    return JSONResponse({"status": "ok", "action": action})
+
+
+@app.get("/video/playback")
+async def get_video_playback() -> JSONResponse:
+    """Return file playback state for frontend scrub controls."""
+    with video_source_state.lock:
+        payload = {
+            "active_source": video_source_state.active_source,
+            "is_file_source": video_source_state.is_file_source,
+            "paused": video_source_state.paused,
+            "position_sec": round(video_source_state.position_sec, 3),
+            "duration_sec": round(video_source_state.duration_sec, 3),
+        }
+    return JSONResponse(payload)
 
 
 # Entry point

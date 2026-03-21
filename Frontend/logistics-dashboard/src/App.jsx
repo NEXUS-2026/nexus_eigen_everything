@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 // Constants
 
 const WS_URL           = `ws://${window.location.host}/ws`;
+const API_BASE         = `${window.location.protocol}//${window.location.hostname}:8000`;
 const RECONNECT_DELAY  = 3000;   // ms before attempting a reconnect
 const METRIC_THROTTLE  = 6;      // update metric useState every N frames (keeps React re-renders at 6~7/sec)
 
@@ -16,28 +17,43 @@ const STATUS = {
 
 // Tailwind colour classes mapped to each status
 const STATUS_STYLES = {
-  [STATUS.CONNECTING]:   { dot: "bg-amber-400 animate-ping",  text: "text-amber-400" },
-  [STATUS.LIVE]:         { dot: "bg-green-400 animate-pulse", text: "text-green-400" },
-  [STATUS.DISCONNECTED]: { dot: "bg-red-500",                 text: "text-red-500"   },
+  [STATUS.CONNECTING]:   { dot: "bg-amber-300 status-scan", text: "text-amber-300", ring: "border-amber-300/40" },
+  [STATUS.LIVE]:         { dot: "bg-emerald-300 status-scan", text: "text-emerald-300", ring: "border-emerald-300/40" },
+  [STATUS.DISCONNECTED]: { dot: "bg-rose-300", text: "text-rose-300", ring: "border-rose-300/40" },
+};
+
+const ALERT_COPY = {
+  [STATUS.LIVE]: {
+    tone: "border-emerald-300/35 bg-emerald-500/10 text-emerald-200",
+    text: "System online. Tracker feed and control link are stable.",
+  },
+  [STATUS.CONNECTING]: {
+    tone: "border-amber-300/35 bg-amber-500/10 text-amber-200",
+    text: "Attempting handshake with backend stream endpoint.",
+  },
+  [STATUS.DISCONNECTED]: {
+    tone: "border-rose-300/35 bg-rose-500/10 text-rose-200",
+    text: "Stream link interrupted. Auto-reconnect routine is active.",
+  },
 };
 
 // Small presentational components
 
-function MetricCard({ label, value, unit, accent = "text-green-400" }) {
+function MetricCard({ label, value, unit, accent = "text-cyan-200" }) {
   return (
     <div className="
-      rounded-2xl border border-slate-700 bg-slate-800/60
-      p-5 flex flex-col gap-1 backdrop-blur-sm
+      panel-metal panel-reveal rounded-xl
+      p-4 flex flex-col gap-1
     ">
-      <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
         {label}
       </span>
       <div className="flex items-end gap-2">
-        <span className={`text-5xl font-black tabular-nums leading-none ${accent}`}>
+        <span className={`text-4xl font-semibold tabular-nums leading-none ${accent} tech-title`}>
           {value}
         </span>
         {unit && (
-          <span className="mb-1 text-sm text-slate-500 font-medium">{unit}</span>
+          <span className="mb-1 text-xs text-slate-500 font-medium uppercase tracking-[0.12em]">{unit}</span>
         )}
       </div>
     </div>
@@ -50,50 +66,51 @@ function StatusCard({ status, fps, infMs }) {
 
   return (
     <div className="
-      rounded-2xl border border-slate-700 bg-slate-800/60
-      p-5 flex flex-col gap-4 backdrop-blur-sm
+      panel-metal panel-reveal rounded-xl
+      p-4 flex flex-col gap-4
     ">
-      {/* Header row */}
-      <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">
-        System Status
+      <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+        System Status Board
       </span>
 
       {/* Connection badge */}
-      <div className="flex items-center gap-3">
-        {/* Pulsing indicator dot */}
-        <span className="relative flex h-3 w-3">
+      <div className={`flex items-center justify-between gap-3 rounded-lg border ${styles.ring} bg-slate-950/70 px-3 py-2`}>
+        <div className="flex items-center gap-2">
+          <span className="relative flex h-2.5 w-2.5">
           <span className={`
             absolute inline-flex h-full w-full rounded-full opacity-75
             ${styles.dot}
           `} />
           <span className={`
             relative inline-flex rounded-full h-3 w-3
-            ${status === STATUS.LIVE ? "bg-green-400" :
-              status === STATUS.CONNECTING ? "bg-amber-400" : "bg-red-500"}
+            ${status === STATUS.LIVE ? "bg-emerald-300" :
+              status === STATUS.CONNECTING ? "bg-amber-300" : "bg-rose-300"}
           `} />
-        </span>
-        <span className={`text-lg font-bold ${styles.text}`}>
-          {status}
-        </span>
+          </span>
+          <span className={`text-sm font-semibold uppercase tracking-[0.14em] ${styles.text} tech-title`}>
+            {status}
+          </span>
+        </div>
+        <span className="text-[10px] text-slate-500 uppercase tracking-[0.12em]">Link Active</span>
       </div>
 
       {/* Sub-metrics row */}
       <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-xl bg-slate-900/70 p-3 flex flex-col gap-0.5">
-          <span className="text-xs text-slate-500 uppercase tracking-wider">
+        <div className="rounded-lg border border-slate-700/60 bg-slate-950/70 p-3 flex flex-col gap-0.5">
+          <span className="text-[10px] text-slate-500 uppercase tracking-[0.13em]">
             Capture FPS
           </span>
-          <span className="text-xl font-bold tabular-nums text-cyan-400">
+          <span className="text-xl font-semibold tabular-nums text-cyan-300 tech-title">
             {fps.toFixed(1)}
           </span>
         </div>
-        <div className="rounded-xl bg-slate-900/70 p-3 flex flex-col gap-0.5">
-          <span className="text-xs text-slate-500 uppercase tracking-wider">
+        <div className="rounded-lg border border-slate-700/60 bg-slate-950/70 p-3 flex flex-col gap-0.5">
+          <span className="text-[10px] text-slate-500 uppercase tracking-[0.13em]">
             YOLO Latency
           </span>
-          <span className="text-xl font-bold tabular-nums text-violet-400">
+          <span className="text-xl font-semibold tabular-nums text-orange-300 tech-title">
             {infMs.toFixed(0)}
-            <span className="text-sm font-normal text-slate-500 ml-1">ms</span>
+            <span className="text-xs font-normal text-slate-500 ml-1 uppercase">ms</span>
           </span>
         </div>
       </div>
@@ -127,16 +144,16 @@ function ResetButton({ onReset, disabled }) {
       disabled={disabled}
       className={`
         w-full rounded-2xl border px-5 py-4
-        text-sm font-bold uppercase tracking-widest
+        text-sm font-semibold uppercase tracking-[0.14em] tech-title
         transition-all duration-200 active:scale-95
         disabled:opacity-30 disabled:cursor-not-allowed
         ${confirming
-          ? "border-red-500 bg-red-500/20 text-red-400 hover:bg-red-500/30"
-          : "border-slate-600 bg-slate-800/60 text-slate-300 hover:border-slate-400 hover:text-white"
+          ? "border-rose-400 bg-rose-500/20 text-rose-200 hover:bg-rose-500/30"
+          : "border-cyan-500/40 bg-cyan-500/10 text-cyan-100 hover:border-cyan-300/80 hover:bg-cyan-500/20"
         }
       `}
     >
-      {confirming ? "⚠ Confirm Reset?" : "↺ Reset Session"}
+      {confirming ? "Confirm Reset Session" : "Reset Session"}
     </button>
   );
 }
@@ -179,6 +196,9 @@ export default function Dashboard() {
   const [fps,    setFps]    = useState(0);
   const [infMs,  setInfMs]  = useState(0);
   const [status, setStatus] = useState(STATUS.CONNECTING);
+  const [isUploadingVideo, setIsUploadingVideo] = useState(false);
+  const [uploadVideoMessage, setUploadVideoMessage] = useState("");
+  const [uploadVideoError, setUploadVideoError] = useState("");
 
   // Canvas drawing helper
 
@@ -322,45 +342,69 @@ export default function Dashboard() {
     }
   }, []);
 
+  const handleVideoUpload = useCallback(async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setUploadVideoError("");
+    setUploadVideoMessage("");
+    setIsUploadingVideo(true);
+
+    try {
+      const body = new FormData();
+      body.append("file", file);
+
+      const response = await fetch(`${API_BASE}/video/upload`, {
+        method: "POST",
+        body,
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.message ?? "Upload failed.");
+      }
+
+      setUploadVideoMessage(`Loaded ${payload.filename}. Switching feed source...`);
+    } catch (error) {
+      setUploadVideoError(error instanceof Error ? error.message : "Upload failed.");
+    } finally {
+      setIsUploadingVideo(false);
+    }
+  }, []);
+
   // Render
+
+  const alert = ALERT_COPY[status] ?? ALERT_COPY[STATUS.DISCONNECTED];
 
   return (
     /*
      * Root : full viewport dark slate background.
      * Using a subtle radial gradient for depth without hurting contrast.
      */
-    <div className="
-      min-h-screen w-full
-      bg-slate-950
-      text-slate-100
-      font-mono
-      flex flex-col
-    "
-    style={{
-      background: "radial-gradient(ellipse at 20% 10%, #0f172a 0%, #020617 70%)"
-    }}
-    >
+    <div className="min-h-screen w-full text-slate-100 flex flex-col">
 
       {/* ── Top header bar ───────────────────────────────────────────────── */}
       <header className="
+        panel-metal
+        sticky top-0 z-20
         flex items-center justify-between
-        px-6 py-4
-        border-b border-slate-800
-        bg-slate-900/50 backdrop-blur-md
+        px-5 py-3 lg:px-7
+        backdrop-blur-md
       ">
         <div className="flex items-center gap-3">
           {/* Warehouse icon — plain SVG, no icon lib dependency */}
-          <svg className="w-7 h-7 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <svg className="w-7 h-7 text-cyan-200" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round"
               d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z"
             />
           </svg>
           <div>
-            <h1 className="text-sm font-bold tracking-widest uppercase text-white">
+            <h1 className="text-base lg:text-lg font-semibold tracking-[0.12em] uppercase text-cyan-50 tech-title">
               Warehouse Box Counter
             </h1>
-            <p className="text-xs text-slate-500 tracking-wider">
-              Edge AI · YOLO + ByteTrack Pipeline
+            <p className="text-[11px] text-slate-400 tracking-[0.16em] uppercase">
+              Industrial Monitoring Console
             </p>
           </div>
         </div>
@@ -369,25 +413,43 @@ export default function Dashboard() {
         <LiveClock />
       </header>
 
+      <div className="max-w-screen-2xl mx-auto w-full px-3 sm:px-4 lg:px-6 pt-3">
+        <div className={`panel-metal rounded-xl px-4 py-2.5 text-[11px] uppercase tracking-[0.12em] border ${alert.tone}`}>
+          {alert.text}
+        </div>
+      </div>
+
       {/* ── Main content grid ────────────────────────────────────────────── */}
       <main className="
         flex-1
         grid grid-cols-1 lg:grid-cols-[1fr_320px]
-        gap-4 p-4
+        gap-3 sm:gap-4 p-3 sm:p-4 lg:p-6
         max-w-screen-2xl mx-auto w-full
       ">
 
         {/* ── Left column: video canvas ──────────────────────────────────── */}
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4 order-2 lg:order-1">
 
           {/* Canvas wrapper — maintains 16:9 aspect ratio */}
-          <div className="
-            relative rounded-2xl overflow-hidden
-            border border-slate-700
-            bg-slate-900
-            aspect-video w-full
-            shadow-2xl shadow-black/60
-          ">
+          <div className="panel-metal panel-reveal rounded-2xl p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-700/70 bg-slate-950/75 px-3 py-2 mb-3">
+              <div>
+                <p className="text-[10px] text-slate-500 uppercase tracking-[0.13em]">Live Feed</p>
+                <p className="text-sm text-cyan-100 tech-title uppercase tracking-[0.1em]">Carton Camera Channel</p>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.1em]">
+                <span className="rounded border border-cyan-400/30 bg-cyan-400/10 px-2 py-1 text-cyan-200">Source WS</span>
+                <span className="rounded border border-slate-600 px-2 py-1 text-slate-300">JPEG</span>
+                <span className="rounded border border-slate-600 px-2 py-1 text-slate-300">40 FPS target</span>
+              </div>
+            </div>
+            <div className="
+              relative rounded-xl overflow-hidden
+              border border-cyan-400/25
+              bg-slate-950
+              aspect-video w-full
+              shadow-2xl shadow-black/60
+            ">
             {/*
              * THE CANVAS : this is the only element that receives video.
              * canvasRef is the ref; drawFrameToCanvas writes to it at 40 FPS.
@@ -401,7 +463,7 @@ export default function Dashboard() {
               ref={canvasRef}
               width={640}
               height={480}
-              className="w-full h-full object-contain"
+              className="w-full h-full object-cover"
               aria-label="Live camera feed"
             />
 
@@ -410,10 +472,10 @@ export default function Dashboard() {
               <div className="
                 absolute inset-0
                 flex flex-col items-center justify-center gap-3
-                bg-slate-950/80 backdrop-blur-sm
+                bg-slate-950/82 backdrop-blur-sm
               ">
-                <div className="w-10 h-10 border-2 border-slate-600 border-t-green-400 rounded-full animate-spin" />
-                <p className="text-slate-400 text-sm tracking-widest uppercase">
+                <div className="w-10 h-10 border-2 border-slate-600 border-t-cyan-300 rounded-full animate-spin" />
+                <p className="text-slate-300 text-xs md:text-sm tracking-[0.15em] uppercase tech-title">
                   {status === STATUS.CONNECTING ? "Connecting to feed…" : "Feed disconnected — reconnecting…"}
                 </p>
               </div>
@@ -425,41 +487,41 @@ export default function Dashboard() {
                 absolute top-3 left-3
                 flex items-center gap-2
                 rounded-full px-3 py-1
-                bg-black/50 backdrop-blur-sm
-                border border-green-500/30
+                bg-slate-950/70 backdrop-blur-sm
+                border border-emerald-300/35
               ">
-                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                <span className="text-xs font-bold text-green-400 tracking-widest uppercase">
+                <span className="w-2 h-2 rounded-full bg-emerald-300 status-scan" />
+                <span className="text-[11px] font-semibold text-emerald-300 tracking-[0.12em] uppercase tech-title">
                   Live
                 </span>
               </div>
             )}
           </div>
+          </div>
 
           {/* Bottom info strip below canvas */}
           <div className="
-            rounded-2xl border border-slate-800 bg-slate-900/40
-            px-5 py-3
-            flex items-center justify-between
-            text-xs text-slate-500 tracking-wider
+            panel-metal panel-reveal rounded-xl
+            px-4 py-3
+            grid grid-cols-1 sm:grid-cols-3 gap-2
+            text-[11px] text-slate-400 tracking-[0.12em] uppercase
           ">
-            <span>Source: <span className="text-slate-400">ws://localhost:8000/ws</span></span>
-            <span>Codec: <span className="text-slate-400">JPEG / 40 FPS target</span></span>
-            <span>Renderer: <span className="text-slate-400">HTML5 Canvas (direct blit)</span></span>
+            <span>Source: <span className="text-cyan-200 normal-case tracking-normal">ws://localhost:8000/ws</span></span>
+            <span>Codec: <span className="text-cyan-200 normal-case tracking-normal">JPEG / 40 FPS target</span></span>
+            <span>Renderer: <span className="text-cyan-200 normal-case tracking-normal">HTML5 Canvas</span></span>
           </div>
         </div>
 
         {/* ── Right sidebar ──────────────────────────────────────────────── */}
-        <aside className="flex flex-col gap-4">
+        <aside className="flex flex-col gap-4 order-1 lg:order-2">
 
           {/* 1. Box count — the primary KPI, largest element */}
           <div className="
-            rounded-2xl border border-green-500/30 bg-slate-800/60
-            p-6 flex flex-col gap-2
-            shadow-lg shadow-green-900/10
-            backdrop-blur-sm
+            panel-metal panel-reveal rounded-xl
+            p-5 flex flex-col gap-2
+            border border-cyan-300/30
           ">
-            <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
               Total Boxes in Carton
             </span>
             {/*
@@ -468,13 +530,13 @@ export default function Dashboard() {
              * This re-renders at ~6/sec (throttled), not 40/sec.
              */}
             <div className={`
-              text-8xl font-black tabular-nums leading-none
+              text-7xl md:text-8xl font-semibold tabular-nums leading-none tech-title
               transition-colors duration-300
-              ${count > 0 ? "text-green-400" : "text-slate-600"}
+              ${count > 0 ? "text-cyan-200" : "text-slate-600"}
             `}>
               {count}
             </div>
-            <span className="text-xs text-slate-600 mt-1">
+            <span className="text-[11px] text-slate-500 mt-1 uppercase tracking-[0.12em]">
               CONFIRMED_INSIDE + HIDDEN_INSIDE tracks
             </span>
           </div>
@@ -482,32 +544,45 @@ export default function Dashboard() {
           {/* 2. System status card */}
           <StatusCard status={status} fps={fps} infMs={infMs} />
 
-          {/* 3. Additional metrics */}
-          <div className="grid grid-cols-2 gap-3">
-            <MetricCard
-              label="FPS"
-              value={fps.toFixed(1)}
-              accent="text-cyan-400"
-            />
-            <MetricCard
-              label="Latency"
-              value={infMs.toFixed(0)}
-              unit="ms"
-              accent="text-violet-400"
-            />
-          </div>
-
-          {/* Divider */}
-          <div className="border-t border-slate-800" />
-
-          {/* 4. Reset button */}
+          {/* 3. Reset placed early for mobile operator ergonomics */}
           <ResetButton
             onReset={handleReset}
             disabled={status !== STATUS.LIVE}
           />
 
-          {/* 5. State legend */}
+          <VideoUploadPanel
+            onUpload={handleVideoUpload}
+            isUploading={isUploadingVideo}
+            message={uploadVideoMessage}
+            error={uploadVideoError}
+          />
+
+          {/* 4. Additional metrics */}
+          <div className="grid grid-cols-2 gap-3">
+            <MetricCard
+              label="FPS"
+              value={fps.toFixed(1)}
+              accent="text-cyan-200"
+            />
+            <MetricCard
+              label="Latency"
+              value={infMs.toFixed(0)}
+              unit="ms"
+              accent="text-orange-200"
+            />
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-slate-700/60" />
+
+          {/* 5. Session history shell (UI only for now) */}
+          <SessionHistoryPanel />
+
+          {/* 6. State legend */}
           <StateLegend />
+
+          {/* 7. Operator notes shell */}
+          <OperatorNotes />
 
         </aside>
       </main>
@@ -535,8 +610,8 @@ function LiveClock() {
 
   return (
     <div className="text-right hidden sm:block">
-      <p className="text-xs text-slate-500 uppercase tracking-widest">Local time</p>
-      <p className="text-sm font-bold tabular-nums text-slate-300">{time}</p>
+      <p className="text-[10px] text-slate-500 uppercase tracking-[0.13em]">Local time</p>
+      <p className="text-sm font-semibold tabular-nums text-cyan-100 tech-title">{time}</p>
     </div>
   );
 }
@@ -556,23 +631,111 @@ function StateLegend() {
 
   return (
     <div className="
-      rounded-2xl border border-slate-700 bg-slate-800/60
-      p-5 flex flex-col gap-3 backdrop-blur-sm
+      panel-metal panel-reveal rounded-xl
+      p-4 flex flex-col gap-3
     ">
-      <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
         Track State Legend
       </span>
       <ul className="flex flex-col gap-2">
         {states.map(({ colour, label, desc }) => (
-          <li key={label} className="flex items-center gap-3">
+          <li key={label} className="flex items-center gap-3 rounded-md border border-slate-700/70 bg-slate-950/60 px-3 py-2">
             <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${colour}`} />
             <div className="flex flex-col leading-tight">
-              <span className="text-xs font-bold text-slate-300">{label}</span>
-              <span className="text-xs text-slate-600">{desc}</span>
+              <span className="text-[11px] font-semibold text-slate-200 tracking-[0.08em] tech-title">{label}</span>
+              <span className="text-[11px] text-slate-500">{desc}</span>
             </div>
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function SessionHistoryPanel() {
+  return (
+    <div className="panel-metal panel-reveal rounded-xl p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+          Session History
+        </span>
+        <span className="text-[10px] uppercase tracking-[0.12em] text-slate-500">UI Shell</span>
+      </div>
+      <div className="rounded-md border border-slate-700/70 bg-slate-950/60 overflow-hidden">
+        <div className="grid grid-cols-[1.3fr_0.8fr_0.9fr] text-[10px] uppercase tracking-[0.11em] text-slate-500 px-3 py-2 border-b border-slate-700/60">
+          <span>Session</span>
+          <span>Boxes</span>
+          <span>Duration</span>
+        </div>
+        <div className="px-3 py-4 text-[11px] text-slate-500">
+          No session data loaded yet.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OperatorNotes() {
+  return (
+    <div className="panel-metal panel-reveal rounded-xl p-4 flex flex-col gap-2">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+        Operator Notes
+      </span>
+      <p className="text-[11px] text-slate-500 leading-relaxed">
+        Placeholder block for shift comments, carton batch tags, and incident remarks.
+      </p>
+      <div className="rounded-md border border-slate-700/70 bg-slate-950/60 px-3 py-2 text-[10px] uppercase tracking-[0.11em] text-slate-500">
+        Notes API wiring next checkpoint
+      </div>
+    </div>
+  );
+}
+
+function VideoUploadPanel({ onUpload, isUploading, message, error }) {
+  return (
+    <div className="panel-metal panel-reveal rounded-xl p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+          Test Video Input
+        </span>
+        <span className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Browser Upload</span>
+      </div>
+
+      <label className="cursor-pointer">
+        <input
+          type="file"
+          accept="video/*,.mp4,.avi,.mov,.mkv,.webm"
+          className="hidden"
+          onChange={onUpload}
+          disabled={isUploading}
+        />
+        <span className={`
+          w-full inline-flex items-center justify-center rounded-lg border px-4 py-3
+          text-[11px] uppercase tracking-[0.13em] tech-title
+          ${isUploading
+            ? "border-slate-600 bg-slate-800/70 text-slate-400"
+            : "border-cyan-400/40 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20"
+          }
+        `}>
+          {isUploading ? "Uploading Video..." : "Upload Test Video"}
+        </span>
+      </label>
+
+      <p className="text-[10px] text-slate-500 uppercase tracking-[0.1em]">
+        Supported: mp4, avi, mov, mkv, webm
+      </p>
+
+      {message && (
+        <div className="rounded-md border border-emerald-300/30 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200">
+          {message}
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-md border border-rose-300/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
