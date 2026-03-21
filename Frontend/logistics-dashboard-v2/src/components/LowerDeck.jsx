@@ -1,3 +1,5 @@
+import { useState, useEffect } from "react";
+
 export function LowerDeck({ modelPending, liveCount, liveEvents }) {
   return (
     <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1.1fr_0.9fr]">
@@ -14,6 +16,31 @@ export function LowerDeck({ modelPending, liveCount, liveEvents }) {
 }
 
 function SessionHistoryPanel({ modelPending, liveCount }) {
+  const [dbSessions, setDbSessions] = useState([]);
+
+  // Fetch the SQLite history from the FastAPI backend
+  useEffect(() => {
+    if (modelPending) return; // Don't ping the DB if the AI isn't running
+
+    const fetchHistory = async () => {
+      try {
+        const res = await fetch('/history'); // Vite proxy routes this to port 8000
+        const data = await res.json();
+        if (data.sessions) {
+          setDbSessions(data.sessions);
+        }
+      } catch (err) {
+        console.error("Failed to fetch SQLite history:", err);
+      }
+    };
+
+    fetchHistory();
+    const interval = setInterval(fetchHistory, 3000); // Refresh every 3 seconds
+    return () => clearInterval(interval);
+  }, [modelPending]);
+
+  // If model is pending, show the UI mock data.
+  // If live, show the CURRENT running session at the top, followed by the DB history.
   const rows = modelPending
     ? [
         { id: "DEMO-A1", boxes: 14, duration: "01:42", status: "Preview" },
@@ -21,8 +48,16 @@ function SessionHistoryPanel({ modelPending, liveCount }) {
         { id: "DEMO-A3", boxes: 11, duration: "01:27", status: "Preview" },
       ]
     : [
-        { id: "LIVE-001", boxes: liveCount, duration: "Running", status: "Live" },
-      ];
+        { id: "LIVE-NOW", boxes: liveCount, duration: "Running", status: "Live" },
+        // Map the backend SQLite data dynamically. 
+        // (Adjust the s.session_id / s.total_count variable names if database.py named them differently!)
+        ...dbSessions.map((s) => ({
+          id: `SESSION-${s.id ?? s.session_id ?? "X"}`,
+          boxes: s.total_count ?? s.boxes ?? 0,
+          duration: s.duration ? `${s.duration}s` : "Ended",
+          status: "Saved"
+        }))
+      ].slice(0, 5); // Keep the UI clean by only showing the top 5 rows
 
   return (
     <div className="panel-metal panel-reveal rounded-xl p-4">
