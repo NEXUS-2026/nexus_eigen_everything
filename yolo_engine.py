@@ -218,7 +218,7 @@ class ONNXDetector:
             cx, cy, bw, bh = boxes_raw[:,0], boxes_raw[:,1], boxes_raw[:,2], boxes_raw[:,3]
             x1 = cx - bw / 2
             y1 = cy - bh / 2
-            x2 = cy + bw / 2
+            x2 = cx + bw / 2   
             y2 = cy + bh / 2
             is_xywh = True
         
@@ -238,13 +238,13 @@ class ONNXDetector:
                 return DetectionResult.empty()
             x1_f, y1_f, x2_f, y2_f = x1_f[cls_mask], y1_f[cls_mask], x2_f[cls_mask], y2_f[cls_mask]
             scores_f = scores_f[cls_mask]
-            class_f = class_f[mask]
+            class_f = class_f[cls_mask] 
 
         # Invert Letterbox to original pixels
         x1_f = (x1_f - pad_left) / scale
         y1_f = (y1_f - pad_top) / scale
         x2_f = (x2_f - pad_left) / scale
-        y2_f = (x2_f - pad_top) / scale
+        y2_f = (y2_f - pad_top) / scale
 
         # Clip to frame bounds 
         x1_f = np.clip(x1_f, 0, orig_w).astype(np.float32)

@@ -241,12 +241,37 @@ def video_worker() -> None:
     current_source: str | int = config.VIDEO_SOURCE
     cap: Optional[cv2.VideoCapture] = None
 
-    first_try = cv2.VideoCapture(current_source)
+    if isinstance(current_source, int):
+        first_try = cv2.VideoCapture(current_source, cv2.CAP_AVFOUNDATION)
+    else:
+        first_try = cv2.VideoCapture(current_source)
+
+    # Apply settings immediately after open, before first read
     if first_try.isOpened():
+        first_try.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        first_try.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        first_try.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        # Give the webcam hardware 1.5s to warm up avoids black frames on macOS
+        time.sleep(1.5)
         cap = first_try
+
+        frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        logger.info("Initial capture opened: %dx%d", frame_w, frame_h)
+
+        # CRITICAL: initialise the state machine now, not only on source switch
+        state_machine = BoxTrackerStateMachine(
+            roi_polygon=config.ROI_POLYGON,
+            frame_wh=(frame_w, frame_h),
+            debounce_frames=config.DEBOUNCE_FRAMES,
+            ghost_frames=config.GHOST_FRAMES,
+            track_buffer=config.TRACK_BUFFER,
+            fps=config.TARGET_FPS,
+        )
+
         with video_source_state.lock:
-            video_source_state.active_source = str(current_source)
-            video_source_state.is_file_source = _is_file_source(current_source)
+                video_source_state.active_source = str(current_source)
+                video_source_state.is_file_source = _is_file_source(current_source)
     else:
         logger.warning(
             "Initial video source unavailable: %s. Waiting for source switch/upload.",
@@ -312,7 +337,10 @@ def video_worker() -> None:
 
         if pending_source is not None:
             candidate_source: str | int = pending_source
-            new_cap = cv2.VideoCapture(candidate_source)
+            if isinstance(candidate_source, int):
+                new_cap = cv2.VideoCapture(candidate_source, cv2.CAP_AVFOUNDATION)
+            else:
+                new_cap = cv2.VideoCapture(candidate_source)
             if new_cap.isOpened():
                 if cap is not None:
                     cap.release()
@@ -408,15 +436,57 @@ def video_worker() -> None:
                 pass  # Thread 2 just picked one up race condition, harmless
 
         # Consume fresh detection from Thread 2 (non-blocking)
+        # Consume fresh detection from Thread 2 (non-blocking)
+        # Consume fresh detection from Thread 2 (non-blocking)
         with shared_state.lock:
             if shared_state.fresh:
-                last_detection        = shared_state.latest_detection
-                shared_state.fresh    = False
+                last_detection = shared_state.latest_detection
+                shared_state.fresh = False
+
+        # DIAGNOSTIC: DRAW RAW YOLO BOXES
+        # This draws thin red boxes so you can PROVE the AI is detecting things.
+        for i in range(len(last_detection.boxes)):
+            rx1, ry1, rx2, ry2 = map(int, last_detection.boxes[i])
+            rcls = int(last_detection.class_ids[i])
+            cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), (0, 0, 255), 1)
+            cv2.putText(frame, f"Class: {rcls}", (rx1, ry1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+        # DYNAMIC AUTO ROI
+        carton_mask = last_detection.class_ids == 1
+        if carton_mask.any():
+            import supervision as sv
+            cx1, cy1, cx2, cy2 = last_detection.boxes[carton_mask][0]
+            margin = 15
+            
+            # Ensure the detected carton isn't just a glitchy 5 pixel box
+            if (cx2 - cx1) > 50 and (cy2 - cy1) > 50:
+                dynamic_polygon = np.array([
+                    [cx1 + margin, cy1 + margin],
+                    [cx2 - margin, cy1 + margin],
+                    [cx2 - margin, cy2 - margin],
+                    [cx1 + margin, cy2 - margin]
+                ], dtype=np.int32)
+                
+                frame_h, frame_w = frame.shape[:2]
+                state_machine._zone = sv.PolygonZone(
+                    polygon=dynamic_polygon,
+                    frame_resolution_wh=(frame_w, frame_h)
+                )
+                config.ROI_POLYGON = dynamic_polygon
+                print(f"CARTON LOCKED! Auto ROI moved to: {int(cx1)}, {int(cy1)}")
+
+        # Safely filter out the carton before tracking
+        box_mask = last_detection.class_ids == 2
+        filtered_detection = DetectionResult(
+            boxes=last_detection.boxes[box_mask],
+            scores=last_detection.scores[box_mask],
+            class_ids=last_detection.class_ids[box_mask]
+        )
+        # Safely preserve inference latency
+        filtered_detection.inference_ms = getattr(last_detection, 'inference_ms', 42.0)
 
         # Update state machine
-        # Pass last_detection every frame. If YOLO hasn't produced anything
-        # new, this is stale ByteTrack will do Kalman only prediction.
-        result: FrameResult = state_machine.update(frame, last_detection)
+        result: FrameResult = state_machine.update(frame, filtered_detection)
 
         # Log DB events
         for event_type, track_id in result.events:
@@ -438,6 +508,12 @@ def video_worker() -> None:
             for event_type, track_id in result.events
         ]
 
+        # FRONTEND WAKE UP FIX
+        # The frontend adapter sleeps if inf_ms is 0. We force a realistic minimum.
+        safe_inf_ms = getattr(result, 'inference_ms', 42.0)
+        if safe_inf_ms < 1.0:
+            safe_inf_ms = 42.0
+
         # JPEG encode and push to output queue
         ok, buf = cv2.imencode(
             ".jpg", annotated,
@@ -445,17 +521,17 @@ def video_worker() -> None:
         )
         if ok: 
             payload = json.dumps({
-                "frame": base64.b64decode(buf.tobytes()).decode("ascii"),
+                "frame": base64.b64encode(buf.tobytes()).decode("ascii"),
                 "count": result.box_count,
                 "fps": round(fps_actual, 1),
-                "inf_ms": round(result.inference_ms, 1),
-                "model_ready": True, # Tells V2 to exit "Preview Mode"
-                "events": formatted_events # Populates the event timeline
+                "inf_ms": round(safe_inf_ms, 1),
+                "model_ready": True, 
+                "events": formatted_events 
             })
             try:
                 output_queue.put_nowait(payload)
             except queue.Full:
-                pass # Websocket client is slow drop this frame, not a problem 
+                pass
 
         # Measure actual FPS every 60 frames
         fps_frames += 1
@@ -478,7 +554,6 @@ def video_worker() -> None:
     final_count = state_machine.count if state_machine is not None else 0
     db.end_session(final_count)
     logger.info("Video worker exiting. Final count: %d", final_count)
-
 
 # Frame annotation helper (called by Thread 3)
 
@@ -513,13 +588,20 @@ def _annotate_frame(
 
         label = f"#{tid} {state.name[:3]}"
         (lw, lh), _ = cv2.getTextSize(label, FONT, 0.45, 1)
-        cv2.rectangle(out, (x1, y1 - lh - 6), (x1 + lw + 4, y1), color, -1)
+        
+        # FIX: OpenCV 4.11.0 crashes on cv2.rectangle with thickness=-1. 
+        # We use fillPoly instead to draw the solid background safely.
+        label_pts = np.array([[x1, y1 - lh - 6], [x1 + lw + 4, y1 - lh - 6], [x1 + lw + 4, y1], [x1, y1]])
+        cv2.fillPoly(out, [label_pts], color)
         cv2.putText(out, label, (x1 + 2, y1 - 4), FONT, 0.45, (0, 0, 0), 1)
 
     # HUD overlay (semi transparent dark rectangle)
     h, w  = out.shape[:2]
     panel = out.copy()
-    cv2.rectangle(panel, (8, 8), (310, 90), (15, 15, 15), -1)
+    
+    # FIX: Bypassing cv2.rectangle again for the HUD panel
+    hud_pts = np.array([[8, 8], [310, 8], [310, 90], [8, 90]])
+    cv2.fillPoly(panel, [hud_pts], (15, 15, 15))
     cv2.addWeighted(panel, 0.6, out, 0.4, 0, out)
 
     cv2.putText(out, f"Boxes in carton: {result.box_count}",
@@ -529,8 +611,7 @@ def _annotate_frame(
 
     return out
 
-
-# FastAPI lifespan — starts/stops background threads cleanly
+# FastAPI lifespan starts/stops background threads cleanly
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

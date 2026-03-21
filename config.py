@@ -25,7 +25,7 @@ ONNX_INPUT_SIZE        = (640, 640)   # (W, H) must match your export
 CONFIDENCE_THRESHOLD   = 0.35
 NMS_IOU_THRESHOLD      = 0.45
 # COCO class 0 = person. Replace with your fine tuned box class ID.
-TARGET_CLASSES         = {2}
+TARGET_CLASSES         = None
 # ORT intra op threads. 3 leaves 1 core free for the video thread on a Pi 4.
 ORT_INTRA_THREADS      = 3
 
@@ -42,11 +42,13 @@ TRACK_BUFFER     = 240  # The ByteTrack Kalman buffer MUST be larger than the GH
 # Measure your actual carton position and replace these values.
 
 _W, _H = 640, 480
+
+# Default: centre 60% of the frame works for webcam at 640x480
 ROI_POLYGON = np.array([
-    [int(_W * 0.20), int(_H * 0.20)],   # top_left
-    [int(_W * 0.80), int(_H * 0.20)],   # top_right
-    [int(_W * 0.80), int(_H * 0.80)],   # bottom_right
-    [int(_W * 0.20), int(_H * 0.80)],   # bottom_left
+    [int(_W * 0.20), int(_H * 0.20)],   # top-left
+    [int(_W * 0.80), int(_H * 0.20)],   # top-right
+    [int(_W * 0.80), int(_H * 0.80)],   # bottom-right
+    [int(_W * 0.20), int(_H * 0.80)],   # bottom-left
 ], dtype=np.int32)
 
 # WebSocket streaming

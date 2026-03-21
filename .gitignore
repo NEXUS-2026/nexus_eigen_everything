@@ -24,9 +24,3 @@ dist/
 
 # Runtime artifacts
 uploads/
-
-# AI models 
-models/
-*.pt
-*.onnx
-
