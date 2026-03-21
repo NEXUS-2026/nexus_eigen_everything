@@ -44,7 +44,43 @@ Ensure you have Python installed. It is recommended to use a virtual environment
 ```bash
 # Clone the repository
 git clone [https://github.com/yourusername/logistics-vision.git](https://github.com/yourusername/logistics-vision.git)
+```
+```bash
 cd logistics-vision
-
+```
+```bash
 # Install backend dependencies
 python -m pip install opencv-python-headless fastapi uvicorn onnxruntime supervision numpy websockets
+```
+
+### 2. Frontend Setup
+Open a new terminal window and navigate to the frontend directory
+```bash
+cd Frontend/logistics-dashboard
+```
+```bash
+# Install Node dependencies 
+npm install
+```
+
+## Running the Application
+
+### 1. Start the Backend: 
+From the root directory, run the FastAPI server:
+```bash
+python main.py
+```
+The server will start on "http://localhost:8000" and look for a webcam at "VIDEO_SOURCE = 0".
+
+### 2. Start the Frontend: 
+From the Frontend/logistics-dashboard directory, start the Vite development server:
+```bash
+npm run dev
+```
+
+## Configuration 
+All core parameters can be tuned in **config.py** without digging into the logic:
+* **VIDEO_SOURCE:** Change from 0 (webcam) to an RTSP IP camera stream or .mp4 file.
+* **TARGET_CLASSES:** Filter exactly which YOLO classes to track.
+* **ROI_POLYGON:** Adjust the coordinates of the target carton zone.
+* **EDGE_MARGIN_PIXELS:** Tune the occlusion threshold.
