@@ -13,14 +13,14 @@ export default defineConfig({
     proxy: {
       // Proxy all /ws websocket connections to FastAPi
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: 'ws://127.0.0.1:8000',
         ws: true,
         changeOrigin: true,
       },
       // Proxy all REST calls (/count, /history, /reset) to FastAPI
-      '/count': { target: 'https://localhost:8000', changeOrigin: true },
-      '/history': { target: 'https://localhost:8000', changeOrigin: true },
-      '/reset': { target: 'https://localhost:8000', changeOrigin: true },
+      '/count': { target: 'http://localhost:8000', changeOrigin: true },
+      '/history': { target: 'http://localhost:8000', changeOrigin: true },
+      '/reset': { target: 'http://localhost:8000', changeOrigin: true },
     }
   }
 })
