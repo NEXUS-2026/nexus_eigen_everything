@@ -10,7 +10,7 @@ from pathlib import Path
 # Paths
 
 BASE_DIR   = Path(__file__).parent
-MODEL_PATH = BASE_DIR / "models" / "yolo26n.onnx"
+MODEL_PATH = BASE_DIR / "models" / "best.onnx"
 DB_PATH    = BASE_DIR / "logs"   / "counts.db"
 LOG_DIR    = BASE_DIR / "logs"
 
