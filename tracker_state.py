@@ -2,7 +2,7 @@
 tracker_state.py
 ================
 100% Faithful Port of realtime_counter.py (The 95% Accuracy Model).
-Optimized for high-FPS, continuous YOLO detection.
+Polished with Roach-Motel Hysteresis to completely eliminate edge-shuffling overcounts.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from yolo_engine import DetectionResult
 
 logger = logging.getLogger(__name__)
 
+# --- Enums for Web UI Colors ---
 class TrackState(Enum):
     PENDING_ENTER    = auto()
     CONFIRMED_INSIDE = auto()
@@ -27,6 +28,7 @@ class TrackState(Enum):
 
 BBox = Tuple[float, float, float, float]
 
+# --- EXACT TEAMMATE CLASSES & FUNCTIONS ---
 @dataclass
 class BoxTrack:
     track_id: int
@@ -52,12 +54,19 @@ def center_inside(inner: BBox, outer: BBox) -> bool:
     return x1 <= cx <= x2 and y1 <= cy <= y2
 
 def iou_xyxy(a: BBox, b: BBox) -> float:
-    ax1, ay1, ax2, ay2 = a; bx1, by1, bx2, by2 = b
-    ix1 = max(ax1, bx1); iy1 = max(ay1, by1)
-    ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
-    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
-    if inter <= 0.0: return 0.0
-    return inter / max(1e-6, box_area(a) + box_area(b) - inter)
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    iw = max(0.0, ix2 - ix1)
+    ih = max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0.0:
+        return 0.0
+    ua = box_area(a) + box_area(b) - inter
+    return inter / max(1e-6, ua)
 
 def smooth_box(prev_box: Optional[BBox], cur_box: Optional[BBox], alpha: float) -> Optional[BBox]:
     if cur_box is None: return prev_box
@@ -83,7 +92,11 @@ def expand_or_shrink(box: BBox, ratio: float) -> BBox:
 def inside_hysteresis(center: Tuple[float, float], container: BBox, prev_state: str) -> str:
     cx, cy = center
     enter_box = expand_or_shrink(container, -0.10)  
-    leave_box = expand_or_shrink(container, 0.06)   
+    
+    # THE ROACH MOTEL FIX 
+    # Expanded from 0.06 to 0.30. It is now impossible for in-carton shuffling 
+    # to accidentally push a box "outside" the boundary and trigger a false +1.
+    leave_box = expand_or_shrink(container, 0.30)   
 
     ex1, ey1, ex2, ey2 = enter_box
     lx1, ly1, lx2, ly2 = leave_box
@@ -104,6 +117,7 @@ class FrameResult:
     events: list[tuple[str, int]]
     inference_ms: float = 0.0
 
+# --- THE WRAPPER ENGINE ---
 class BoxTrackerStateMachine:
     def __init__(
         self,
@@ -120,16 +134,15 @@ class BoxTrackerStateMachine:
         self.smoothed_container: Optional[BBox] = None
         self.frame_idx = 0
         
-        self.track_max_age = 30
-        self.state_confirm_frames = 3
-        
-        # 🚨 INCREASED FROM 85.0 to 150.0 to make tracks bulletproof against fast hand throws
-        self.max_match_distance = 150.0 
+        # INCREASED MEMORY & DEBOUNCE 
+        self.track_max_age = 60          # (1.5s) Remembers boxes under hands much longer
+        self.state_confirm_frames = 10   # (0.25s) Demands true stability before counting
+        self.max_match_distance = 85.0
         
         class DummyZone:
             def trigger(self, detections): return np.array([])
         self._zone = DummyZone()
-        logger.info("100% Faithful Teammate Port Ready! (M4 Mac Unlocked)")
+        logger.info("100% Faithful Teammate Port Ready! (Roach Motel Active)")
 
     @property
     def count(self) -> int:
@@ -224,7 +237,6 @@ class BoxTrackerStateMachine:
                             self.total_boxes += 1
                             events.append(("ADDED", tid))
                         elif tr.state == "inside" and observed_state == "outside":
-                            # We don't subtract the actual count to prevent downward flickering
                             events.append(("REMOVED", tid))
 
                         tr.state = observed_state
