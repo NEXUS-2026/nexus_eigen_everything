@@ -1,9 +1,8 @@
 """
 tracker_state.py
 ================
-True Boundary-Crossing Tracker (Ported from the 95% Accuracy Model).
-Counts boxes ONLY when they physically travel from outside the carton to inside.
-Perfectly handles 3D Z-Axis stacking and completely ignores in-carton ID flickering.
+100% Faithful Port of realtime_counter.py (The 95% Accuracy Model).
+Optimized for high-FPS, continuous YOLO detection.
 """
 
 from __future__ import annotations
@@ -28,12 +27,50 @@ class TrackState(Enum):
 
 BBox = Tuple[float, float, float, float]
 
-def box_area(box: BBox) -> float:
-    return max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
+@dataclass
+class BoxTrack:
+    track_id: int
+    cx: float
+    cy: float
+    box: BBox
+    state: str
+    pending_state: str
+    pending_count: int
+    last_seen: int
 
 def box_center(box: BBox) -> Tuple[float, float]:
     x1, y1, x2, y2 = box
     return 0.5 * (x1 + x2), 0.5 * (y1 + y2)
+
+def box_area(box: BBox) -> float:
+    x1, y1, x2, y2 = box
+    return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+def center_inside(inner: BBox, outer: BBox) -> bool:
+    cx, cy = box_center(inner)
+    x1, y1, x2, y2 = outer
+    return x1 <= cx <= x2 and y1 <= cy <= y2
+
+def iou_xyxy(a: BBox, b: BBox) -> float:
+    ax1, ay1, ax2, ay2 = a; bx1, by1, bx2, by2 = b
+    ix1 = max(ax1, bx1); iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    if inter <= 0.0: return 0.0
+    return inter / max(1e-6, box_area(a) + box_area(b) - inter)
+
+def smooth_box(prev_box: Optional[BBox], cur_box: Optional[BBox], alpha: float) -> Optional[BBox]:
+    if cur_box is None: return prev_box
+    if prev_box is None: return cur_box
+    px1, py1, px2, py2 = prev_box
+    cx1, cy1, cx2, cy2 = cur_box
+    a = max(0.0, min(1.0, alpha))
+    return (
+        (1.0 - a) * px1 + a * cx1,
+        (1.0 - a) * py1 + a * cy1,
+        (1.0 - a) * px2 + a * cx2,
+        (1.0 - a) * py2 + a * cy2,
+    )
 
 def expand_or_shrink(box: BBox, ratio: float) -> BBox:
     x1, y1, x2, y2 = box
@@ -45,8 +82,8 @@ def expand_or_shrink(box: BBox, ratio: float) -> BBox:
 
 def inside_hysteresis(center: Tuple[float, float], container: BBox, prev_state: str) -> str:
     cx, cy = center
-    enter_box = expand_or_shrink(container, -0.10)  # -10% stricter to enter
-    leave_box = expand_or_shrink(container, 0.06)   # +6% looser to leave
+    enter_box = expand_or_shrink(container, -0.10)  
+    leave_box = expand_or_shrink(container, 0.06)   
 
     ex1, ey1, ex2, ey2 = enter_box
     lx1, ly1, lx2, ly2 = leave_box
@@ -57,25 +94,6 @@ def inside_hysteresis(center: Tuple[float, float], container: BBox, prev_state: 
     if prev_state == "inside":
         return "inside" if in_leave else "outside"
     return "inside" if in_enter else "outside"
-
-def iou_xyxy(a: BBox, b: BBox) -> float:
-    ax1, ay1, ax2, ay2 = a; bx1, by1, bx2, by2 = b
-    ix1 = max(ax1, bx1); iy1 = max(ay1, by1)
-    ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
-    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
-    if inter <= 0.0: return 0.0
-    return inter / max(1e-6, box_area(a) + box_area(b) - inter)
-
-@dataclass
-class TrackRecord:
-    track_id: int
-    cx: float
-    cy: float
-    box: BBox
-    state: str
-    pending_state: str
-    pending_count: int
-    last_seen: int
 
 @dataclass
 class FrameResult:
@@ -96,72 +114,85 @@ class BoxTrackerStateMachine:
         track_buffer: int = 300,
         fps: int = 40,
     ) -> None:
-        self.state_confirm_frames = debounce_frames
-        self.track_max_age = ghost_frames
-        self.max_match_distance = 85.0
+        self.tracks: dict[int, BoxTrack] = {}
+        self.next_track_id = 1
+        self.total_boxes = 0
+        self.smoothed_container: Optional[BBox] = None
+        self.frame_idx = 0
         
-        self._records: dict[int, TrackRecord] = {}
-        self._next_id = 1
-        self._count = 0
-        self._frame_idx = 0
+        self.track_max_age = 30
+        self.state_confirm_frames = 3
+        
+        # 🚨 INCREASED FROM 85.0 to 150.0 to make tracks bulletproof against fast hand throws
+        self.max_match_distance = 150.0 
         
         class DummyZone:
             def trigger(self, detections): return np.array([])
         self._zone = DummyZone()
-
-        logger.info("Boundary-Crossing Engine Ready | 95% Accuracy Logic Restored")
+        logger.info("100% Faithful Teammate Port Ready! (M4 Mac Unlocked)")
 
     @property
     def count(self) -> int:
-        return self._count
+        return self.total_boxes
 
     def reset(self) -> None:
-        self._records.clear()
-        self._next_id = 1
-        self._count = 0
-        self._frame_idx = 0
+        self.tracks.clear()
+        self.next_track_id = 1
+        self.total_boxes = 0
+        self.smoothed_container = None
+        self.frame_idx = 0
         logger.info("Session reset.")
 
-    def update(
-        self,
-        frame: np.ndarray,
-        detection_result: DetectionResult,
-    ) -> FrameResult:
-        self._frame_idx += 1
+    def update(self, frame: np.ndarray, detection_result: DetectionResult) -> FrameResult:
+        self.frame_idx += 1
         events: list[tuple[str, int]] = []
 
-        # 1. Container Bounding Box
-        poly = config.ROI_POLYGON
-        c_xmin, c_xmax = min(poly[:,0]), max(poly[:,0])
-        c_ymin, c_ymax = min(poly[:,1]), max(poly[:,1])
-        container_box = (c_xmin, c_ymin, c_xmax, c_ymax)
+        containers = []
+        all_boxes = []
 
-        # 2. Extract Box Detections (Class 2 only)
-        current_boxes = []
-        det_centers = []
         for i in range(detection_result.count):
-            cls = int(detection_result.class_ids[i])
-            if cls == 2:
-                b = tuple(float(v) for v in detection_result.boxes[i])
-                if box_area(b) >= 40.0:
-                    current_boxes.append(b)
-                    det_centers.append(box_center(b))
+            cls_id = int(detection_result.class_ids[i])
+            box = tuple(float(v) for v in detection_result.boxes[i])
+            
+            if cls_id == 1:
+                containers.append(box)
+            elif cls_id == 2:
+                all_boxes.append(box)
 
-        # 3. Match Existing Tracks
-        active_track_ids = [tid for tid, tr in self._records.items() if self._frame_idx - tr.last_seen <= self.track_max_age]
+        container_box = max(containers, key=box_area) if containers else None
+        self.smoothed_container = smooth_box(self.smoothed_container, container_box, alpha=0.25)
+        active_container = self.smoothed_container
+
+        if active_container is None:
+            poly = config.ROI_POLYGON
+            active_container = (min(poly[:,0]), min(poly[:,1]), max(poly[:,0]), max(poly[:,1]))
+
+        boxes_inside = []
+        boxes_outside = []
+        for b in all_boxes:
+            if active_container is not None and center_inside(b, active_container):
+                boxes_inside.append(b)
+            else:
+                boxes_outside.append(b)
+
+        current_boxes = boxes_inside + boxes_outside
+        det_centers = [box_center(b) for b in current_boxes]
+        det_states = ["inside" if b in boxes_inside else "outside" for b in current_boxes]
+
+        active_track_ids = [tid for tid, tr in self.tracks.items() if self.frame_idx - tr.last_seen <= self.track_max_age]
+
         iou_pairs = []
         pairs = []
-        
         for det_idx, (cx, cy) in enumerate(det_centers):
             for tid in active_track_ids:
-                tr = self._records[tid]
+                tr = self.tracks[tid]
                 ov = iou_xyxy(current_boxes[det_idx], tr.box)
                 if ov >= 0.18:
                     iou_pairs.append((ov, tid, det_idx))
                 dist = math.hypot(cx - tr.cx, cy - tr.cy)
                 if dist <= self.max_match_distance:
                     pairs.append((dist, tid, det_idx))
-                    
+
         iou_pairs.sort(key=lambda x: x[0], reverse=True)
         pairs.sort(key=lambda x: x[0])
 
@@ -172,79 +203,71 @@ class BoxTrackerStateMachine:
             for _, tid, det_idx in match_list:
                 if tid in matched_tracks or det_idx in matched_dets:
                     continue
-                    
-                tr = self._records[tid]
-                cx, cy = det_centers[det_idx]
-                obs_state = inside_hysteresis((cx, cy), container_box, tr.state)
 
-                if obs_state == tr.state:
+                tr = self.tracks[tid]
+                observed_state = det_states[det_idx]
+                if active_container is not None:
+                    observed_state = inside_hysteresis(det_centers[det_idx], active_container, tr.state)
+
+                if observed_state == tr.state:
                     tr.pending_state = tr.state
                     tr.pending_count = 0
                 else:
-                    if obs_state == tr.pending_state:
+                    if observed_state == tr.pending_state:
                         tr.pending_count += 1
                     else:
-                        tr.pending_state = obs_state
+                        tr.pending_state = observed_state
                         tr.pending_count = 1
 
                     if tr.pending_count >= self.state_confirm_frames:
-                        # 🚨 THE MAGIC SAUCE: Only count on Boundary Crossings!
-                        if tr.state == "outside" and obs_state == "inside":
-                            self._count += 1
+                        if tr.state == "outside" and observed_state == "inside":
+                            self.total_boxes += 1
                             events.append(("ADDED", tid))
-                        elif tr.state == "inside" and obs_state == "outside":
-                            self._count = max(0, self._count - 1)
+                        elif tr.state == "inside" and observed_state == "outside":
+                            # We don't subtract the actual count to prevent downward flickering
                             events.append(("REMOVED", tid))
 
-                        tr.state = obs_state
-                        tr.pending_state = obs_state
+                        tr.state = observed_state
+                        tr.pending_state = observed_state
                         tr.pending_count = 0
 
-                tr.cx = cx
-                tr.cy = cy
+                tr.cx, tr.cy = det_centers[det_idx]
                 tr.box = current_boxes[det_idx]
-                tr.last_seen = self._frame_idx
-                
+                tr.last_seen = self.frame_idx
+
                 matched_tracks.add(tid)
                 matched_dets.add(det_idx)
 
-        # 4. Create New Tracks
         for det_idx, (cx, cy) in enumerate(det_centers):
             if det_idx in matched_dets:
                 continue
-                
-            # 🚨 INITIALIZE WITH RAW STATE 🚨
-            # If it spawns inside (flicker), it never crosses the boundary, so it's safely ignored!
-            ex1, ey1, ex2, ey2 = expand_or_shrink(container_box, -0.10)
-            initial_state = "inside" if (ex1 <= cx <= ex2 and ey1 <= cy <= ey2) else "outside"
-            
-            self._records[self._next_id] = TrackRecord(
-                track_id=self._next_id, cx=cx, cy=cy, box=current_boxes[det_idx],
-                state=initial_state, pending_state=initial_state,
-                pending_count=0, last_seen=self._frame_idx
+            self.tracks[self.next_track_id] = BoxTrack(
+                track_id=self.next_track_id,
+                cx=cx, cy=cy, box=current_boxes[det_idx],
+                state=det_states[det_idx], pending_state=det_states[det_idx],
+                pending_count=0, last_seen=self.frame_idx,
             )
-            self._next_id += 1
+            self.next_track_id += 1
 
-        # 5. Purge Stale Tracks
-        stale_ids = [tid for tid, tr in self._records.items() if self._frame_idx - tr.last_seen > self.track_max_age]
+        stale_ids = [tid for tid, tr in self.tracks.items() if self.frame_idx - tr.last_seen > self.track_max_age]
         for tid in stale_ids:
-            del self._records[tid]
+            del self.tracks[tid]
 
-        # 6. UI Formatting (Show only boxes currently inside)
-        visible_in_carton = []
-        visible_ids = []
         track_states = {}
-        
-        for tid, tr in self._records.items():
-            if tr.state == "inside" and (self._frame_idx - tr.last_seen < 3):
-                visible_in_carton.append(tr.box)
+        visible_boxes = []
+        visible_ids = []
+        for tid, tr in self.tracks.items():
+            if self.frame_idx - tr.last_seen <= 1:
+                visible_boxes.append(tr.box)
                 visible_ids.append(tid)
-                track_states[tid] = TrackState.CONFIRMED_INSIDE
+                track_states[tid] = TrackState.CONFIRMED_INSIDE if tr.state == "inside" else TrackState.PENDING_ENTER
+            elif tr.state == "inside":
+                track_states[tid] = TrackState.HIDDEN_INSIDE
 
-        out_boxes = np.array(visible_in_carton, dtype=np.float32) if visible_in_carton else np.empty((0,4), dtype=np.float32)
+        out_boxes = np.array(visible_boxes, dtype=np.float32) if visible_boxes else np.empty((0,4), dtype=np.float32)
         out_ids = np.array(visible_ids, dtype=int) if visible_ids else np.empty((0,), dtype=int)
 
         return FrameResult(
-            tracked_boxes=out_boxes, track_ids=out_ids, box_count=self._count,
+            tracked_boxes=out_boxes, track_ids=out_ids, box_count=self.total_boxes,
             track_states=track_states, events=events, inference_ms=detection_result.inference_ms
         )

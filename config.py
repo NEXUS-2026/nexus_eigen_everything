@@ -22,7 +22,7 @@ VIDEO_SOURCE: str | int = 0
 # Inference engine
 
 ONNX_INPUT_SIZE        = (512,512)   # (W, H) must match your export
-CONFIDENCE_THRESHOLD   = 0.35
+CONFIDENCE_THRESHOLD   = 0.22
 NMS_IOU_THRESHOLD      = 0.45
 # COCO class 0 = person. Replace with your fine tuned box class ID.
 TARGET_CLASSES         = None

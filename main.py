@@ -287,7 +287,7 @@ def video_worker() -> None:
     db.start_session()
 
     frame_duration = 1.0 / config.TARGET_FPS
-    detect_skip    = 4      # send a frame to Thread 2 every N ticks (~10 FPS)
+    detect_skip    = 1      # send a frame to Thread 2 every N ticks (~10 FPS)
     tick           = 0
     fps_actual     = 0.0
     fps_t0         = time.perf_counter()
