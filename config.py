@@ -21,7 +21,7 @@ VIDEO_SOURCE: str | int = 0
 
 # Inference engine
 
-ONNX_INPUT_SIZE        = (640, 640)   # (W, H) must match your export
+ONNX_INPUT_SIZE        = (512,512)   # (W, H) must match your export
 CONFIDENCE_THRESHOLD   = 0.35
 NMS_IOU_THRESHOLD      = 0.45
 # COCO class 0 = person. Replace with your fine tuned box class ID.
@@ -32,9 +32,10 @@ ORT_INTRA_THREADS      = 3
 # Tracker & state machine
 
 TARGET_FPS       = 40
-DEBOUNCE_FRAMES  = 5    # frames inside ROI before +1 is confirmed (~125 ms)
-GHOST_FRAMES     = 30   # Increase to 200 frames (5 full seconds of memory if the camera is blocked). If the worker takes longer than 5 seconds, increase this to 400 (10 seconds)
-TRACK_BUFFER     = 30  # The ByteTrack Kalman buffer MUST be larger than the GHOST_FRAMES. This ensures the tracker algorithm doesn't forget the boxes before your state machine does.
+DEBOUNCE_FRAMES  = 3    # faster confirmation
+GHOST_FRAMES     = 200   # 5 seconds, keeps ghost memory alive long enough 
+TRACK_BUFFER     = 300  # Must be much larger than GHOST_FRAMES
+                        # so ByteTrack never forgets before we do 
 
 
 # ROI polygon vertices in [x, y] order, pixel coordinates.

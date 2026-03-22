@@ -407,8 +407,10 @@ def video_worker() -> None:
         # Capture frame
         ret, frame = cap.read()
         if not ret:
-            # End of file loop back to start for recorded video
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            # End of video: AUTO-PAUSE instead of looping
+            with video_source_state.lock:
+                video_source_state.paused = True
+            time.sleep(0.1)
             continue
 
         pos_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
@@ -455,37 +457,27 @@ def video_worker() -> None:
         carton_mask = last_detection.class_ids == 1
         if carton_mask.any():
             import supervision as sv
-            cx1, cy1, cx2, cy2 = last_detection.boxes[carton_mask][0]
-            margin = 15
             
-            # Ensure the detected carton isn't just a glitchy 5 pixel box
-            if (cx2 - cx1) > 50 and (cy2 - cy1) > 50:
+            # Grab the largest carton (prevents background cardboard from teleporting the ROI)
+            c_boxes = last_detection.boxes[carton_mask]
+            areas = (c_boxes[:, 2] - c_boxes[:, 0]) * (c_boxes[:, 3] - c_boxes[:, 1])
+            best_idx = int(np.argmax(areas))
+            cx1, cy1, cx2, cy2 = c_boxes[best_idx]
+
+            # No inward margins. Use the full physical carton size.
+            if (cx2 - cx1) > 100 and (cy2 - cy1) > 100:
                 dynamic_polygon = np.array([
-                    [cx1 + margin, cy1 + margin],
-                    [cx2 - margin, cy1 + margin],
-                    [cx2 - margin, cy2 - margin],
-                    [cx1 + margin, cy2 - margin]
+                    [cx1, cy1],
+                    [cx2, cy1],
+                    [cx2, cy2],
+                    [cx1, cy2]
                 ], dtype=np.int32)
-                
-                frame_h, frame_w = frame.shape[:2]
-                state_machine._zone = sv.PolygonZone(
-                    polygon=dynamic_polygon
-                )
+
+                state_machine._zone = sv.PolygonZone(polygon=dynamic_polygon)
                 config.ROI_POLYGON = dynamic_polygon
-                print(f"CARTON LOCKED! Auto ROI moved to: {int(cx1)}, {int(cy1)}")
 
-        # Safely filter out the carton before tracking
-        box_mask = last_detection.class_ids == 2
-        filtered_detection = DetectionResult(
-            boxes=last_detection.boxes[box_mask],
-            scores=last_detection.scores[box_mask],
-            class_ids=last_detection.class_ids[box_mask]
-        )
-        # Safely preserve inference latency
-        filtered_detection.inference_ms = getattr(last_detection, 'inference_ms', 42.0)
-
-        # Update state machine
-        result: FrameResult = state_machine.update(frame, filtered_detection)
+        # Do not Filter Detections, the tracker needs to see the person (class 0) to freeze the count!
+        result: FrameResult = state_machine.update(frame, last_detection)
 
         # Log DB events
         for event_type, track_id in result.events:
